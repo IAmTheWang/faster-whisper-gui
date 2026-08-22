@@ -1,0 +1,25 @@
+# Go build artifacts
+/faster-whisper-gui
+/faster-whisper-gui.exe
+*.exe
+*.test
+
+# runtime-managed directories: user-supplied binaries/models, scratch files
+/bin/
+/models/
+/tmp/
+
+# frontend
+/web/node_modules/
+/web/dist/
+# use bun, not npm — ignore an npm lockfile in case one gets created by accident
+/web/package-lock.json
+
+# embedded frontend build output — keep the placeholder index.html tracked
+# so a fresh clone can `go build` before ever running `bun run build`
+/internal/webui/dist/*
+!/internal/webui/dist/index.html
+
+# editor/OS cruft
+.DS_Store
+Thumbs.db
