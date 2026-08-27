@@ -29,5 +29,20 @@ export class Store<T> {
   }
 }
 
-export const selectedVideo = new Store<Entry | null>(null)
-export const activeJobId = new Store<string | null>(null)
+// selectedVideos holds the checked-but-not-yet-submitted videos in the
+// directory browser (cleared once a batch of jobs is started).
+export const selectedVideos = new Store<Entry[]>([])
+
+// TabInfo is one entry in openTabs — carrying videoName alongside the job id
+// so progressPanel's tab strip doesn't need an extra fetch just for a label.
+export interface TabInfo {
+  id: string
+  videoName: string
+}
+
+// openTabs is every job currently shown as a Progress tab (new jobs from a
+// batch submit, or older jobs reopened from History); activeTabId is which
+// one is frontmost. Replaces the old single-job activeJobId now that several
+// jobs can be in flight/viewable at once.
+export const openTabs = new Store<TabInfo[]>([])
+export const activeTabId = new Store<string | null>(null)

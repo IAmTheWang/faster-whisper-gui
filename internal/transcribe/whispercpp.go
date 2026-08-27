@@ -38,7 +38,13 @@ func BuildWhisperArgs(opts Options) []string {
 // binary (subprocess, not cgo — see the architecture notes in the project
 // plan for why).
 type WhisperCppEngine struct {
-	CliPath string
+	// CliPath is called fresh for every Transcribe invocation rather than
+	// stored as a plain string, because a single WhisperCppEngine instance
+	// is constructed once and reused for every job (see internal/appserver)
+	// — a plain string field would freeze in whatever path was configured
+	// at startup, ignoring later Settings-panel changes. Typically a
+	// (*config.Config).EffectiveWhisperCliPath method value.
+	CliPath func() string
 }
 
 var _ Engine = (*WhisperCppEngine)(nil)
@@ -99,7 +105,7 @@ type progressUpdate struct {
 // whisper-cli's own stderr percentage line; onProgress is called with the
 // running best (monotonically non-decreasing) estimate.
 func (e *WhisperCppEngine) Transcribe(ctx context.Context, opts Options, onProgress func(Progress)) error {
-	cmd := exec.CommandContext(ctx, e.CliPath, BuildWhisperArgs(opts)...)
+	cmd := exec.CommandContext(ctx, e.CliPath(), BuildWhisperArgs(opts)...)
 
 	stdoutPipe, err := cmd.StdoutPipe()
 	if err != nil {

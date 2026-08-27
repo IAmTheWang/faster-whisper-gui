@@ -1,14 +1,14 @@
 import { api, type Job } from '../api'
-import { escapeHtml } from '../dom'
-import { activeJobId } from '../state'
+import { basenameOf, escapeHtml } from '../dom'
+import { activeTabId, openTabs } from '../state'
 
 const statusLabels: Record<string, string> = {
-  queued: '排队中',
-  extracting_audio: '提取音频中',
-  transcribing: '转录中',
-  done: '已完成',
-  failed: '失败',
-  canceled: '已取消',
+  queued: 'Queued',
+  extracting_audio: 'Extracting audio',
+  transcribing: 'Transcribing',
+  done: 'Done',
+  failed: 'Failed',
+  canceled: 'Canceled',
 }
 
 const inProgressStatuses = new Set(['queued', 'extracting_audio', 'transcribing'])
@@ -20,7 +20,7 @@ export interface JobHistoryHandle {
 export function mountJobHistory(root: HTMLElement): JobHistoryHandle {
   root.innerHTML = `
     <div class="panel">
-      <h2>任务历史</h2>
+      <h2>Job History</h2>
       <ul class="job-list"></ul>
     </div>
   `
@@ -29,13 +29,13 @@ export function mountJobHistory(root: HTMLElement): JobHistoryHandle {
   function render(jobs: Job[]): void {
     list.innerHTML = ''
     if (jobs.length === 0) {
-      list.innerHTML = '<li class="job-empty">暂无任务</li>'
+      list.innerHTML = '<li class="job-empty">No jobs yet</li>'
       return
     }
 
-    const activeId = activeJobId.get()
+    const activeId = activeTabId.get()
     for (const j of jobs) {
-      const name = j.request.videoPath.split(/[\\/]/).pop() ?? j.request.videoPath
+      const name = basenameOf(j.request.videoPath)
       const statusText = statusLabels[j.status] ?? j.status
       const percentSuffix = inProgressStatuses.has(j.status) ? ` (${Math.round(j.percent)}%)` : ''
 
@@ -46,7 +46,12 @@ export function mountJobHistory(root: HTMLElement): JobHistoryHandle {
         <div class="job-name">${escapeHtml(name)}</div>
         <div class="job-status">${escapeHtml(statusText + percentSuffix)}</div>
       `
-      li.addEventListener('click', () => activeJobId.set(j.id))
+      li.addEventListener('click', () => {
+        if (!openTabs.get().some((t) => t.id === j.id)) {
+          openTabs.set([...openTabs.get(), { id: j.id, videoName: name }])
+        }
+        activeTabId.set(j.id)
+      })
       list.appendChild(li)
     }
   }
@@ -56,7 +61,7 @@ export function mountJobHistory(root: HTMLElement): JobHistoryHandle {
     render(jobs)
   }
 
-  activeJobId.subscribe(() => refresh())
+  activeTabId.subscribe(() => refresh())
 
   return { refresh }
 }

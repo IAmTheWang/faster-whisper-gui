@@ -28,6 +28,86 @@ func TestIsVideoFile(t *testing.T) {
 	}
 }
 
+func TestIsExeFile(t *testing.T) {
+	tests := []struct {
+		name string
+		path string
+		want bool
+	}{
+		{"exe", `C:\tools\ffmpeg.exe`, true},
+		{"uppercase extension", `C:\tools\FFMPEG.EXE`, true},
+		{"dll is not an exe", `C:\tools\whisper.dll`, false},
+		{"no extension", `C:\tools\ffmpeg`, false},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := IsExeFile(tt.path); got != tt.want {
+				t.Errorf("IsExeFile(%q) = %v, want %v", tt.path, got, tt.want)
+			}
+		})
+	}
+}
+
+func TestListFilteredDirsOnly(t *testing.T) {
+	dir := t.TempDir()
+	mustWrite(t, filepath.Join(dir, "video.mp4"), "video")
+	mustWrite(t, filepath.Join(dir, "tool.exe"), "exe")
+	if err := os.Mkdir(filepath.Join(dir, "subdir"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+
+	listing, err := ListFiltered(dir, func(string) bool { return false }, "")
+	if err != nil {
+		t.Fatalf("ListFiltered: %v", err)
+	}
+	if len(listing.Entries) != 1 || listing.Entries[0].Type != "dir" {
+		t.Fatalf("Entries = %+v, want exactly the one subdirectory", listing.Entries)
+	}
+}
+
+func TestListFilteredExe(t *testing.T) {
+	dir := t.TempDir()
+	mustWrite(t, filepath.Join(dir, "video.mp4"), "video")
+	mustWrite(t, filepath.Join(dir, "ffmpeg.exe"), "exe")
+
+	listing, err := ListFiltered(dir, IsExeFile, "file")
+	if err != nil {
+		t.Fatalf("ListFiltered: %v", err)
+	}
+	if len(listing.Entries) != 1 || listing.Entries[0].Name != "ffmpeg.exe" || listing.Entries[0].Type != "file" {
+		t.Fatalf("Entries = %+v, want exactly ffmpeg.exe typed \"file\"", listing.Entries)
+	}
+}
+
+func TestValidateExeFile(t *testing.T) {
+	dir := t.TempDir()
+	exe := filepath.Join(dir, "ffmpeg.exe")
+	mustWrite(t, exe, "exe")
+	notExe := filepath.Join(dir, "notes.txt")
+	mustWrite(t, notExe, "text")
+
+	if _, err := ValidateExeFile("relative\\ffmpeg.exe"); err == nil {
+		t.Error("expected error for relative path")
+	}
+	if _, err := ValidateExeFile(filepath.Join(dir, "missing.exe")); err == nil {
+		t.Error("expected error for nonexistent file")
+	}
+	if _, err := ValidateExeFile(dir); err == nil {
+		t.Error("expected error when path is a directory")
+	}
+	if _, err := ValidateExeFile(notExe); err == nil {
+		t.Error("expected error for a non-.exe extension")
+	}
+
+	got, err := ValidateExeFile(exe)
+	if err != nil {
+		t.Fatalf("ValidateExeFile(%q): %v", exe, err)
+	}
+	if got != filepath.Clean(exe) {
+		t.Errorf("got %q, want %q", got, filepath.Clean(exe))
+	}
+}
+
 func TestList(t *testing.T) {
 	dir := t.TempDir()
 
@@ -161,6 +241,47 @@ func TestEnsureWritable(t *testing.T) {
 	}
 	if string(data) != "previous subtitle content" {
 		t.Errorf("EnsureWritable must not truncate existing content, got %q", data)
+	}
+}
+
+func TestCopyFile(t *testing.T) {
+	dir := t.TempDir()
+	src := filepath.Join(dir, "source.srt")
+	mustWrite(t, src, "1\n00:00:00,000 --> 00:00:01,000\nhello\n")
+
+	dst := filepath.Join(dir, "dest", "copy.srt")
+	if err := os.MkdirAll(filepath.Dir(dst), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := CopyFile(src, dst); err != nil {
+		t.Fatalf("CopyFile: %v", err)
+	}
+
+	got, err := os.ReadFile(dst)
+	if err != nil {
+		t.Fatalf("read copy: %v", err)
+	}
+	want, err := os.ReadFile(src)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(got) != string(want) {
+		t.Errorf("copy content = %q, want %q", got, want)
+	}
+	if _, err := os.Stat(src); err != nil {
+		t.Errorf("source should be untouched: %v", err)
+	}
+
+	// Copying again over an existing destination should overwrite, not append.
+	if err := CopyFile(src, dst); err != nil {
+		t.Fatalf("CopyFile (overwrite): %v", err)
+	}
+	got, err = os.ReadFile(dst)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(got) != string(want) {
+		t.Errorf("copy content after overwrite = %q, want %q", got, want)
 	}
 }
 

@@ -1,40 +1,44 @@
 import { api, type Language, type Model, type OutputMode } from '../api'
-import { activeJobId, selectedVideo } from '../state'
+import { activeTabId, openTabs, selectedVideos, type TabInfo } from '../state'
 
-export function mountJobConfigPanel(root: HTMLElement, onJobCreated: () => void): void {
+export interface JobConfigPanelHandle {
+  refreshModels: () => Promise<void>
+}
+
+export function mountJobConfigPanel(root: HTMLElement, onJobCreated: () => void): JobConfigPanelHandle {
   root.innerHTML = `
     <div class="panel">
-      <h2>转录设置</h2>
+      <h2>Transcription Settings</h2>
       <div class="field">
-        <label>视频文件</label>
-        <div class="selected-video">未选择</div>
+        <label>Video Files</label>
+        <div class="selected-video">No videos selected</div>
       </div>
       <div class="field">
-        <label for="model-select">模型</label>
+        <label for="model-select">Model</label>
         <select id="model-select" class="model-select"></select>
       </div>
       <div class="field">
-        <label for="language-select">语言</label>
+        <label for="language-select">Language</label>
         <select id="language-select" class="language-select"></select>
       </div>
       <div class="field">
-        <label>输出位置</label>
+        <label>Output Location</label>
         <label class="radio-label">
-          <input type="radio" name="outputMode" value="same_as_video" checked /> 默认（与视频同目录）
+          <input type="radio" name="outputMode" value="same_as_video" checked /> Default (same directory as video)
         </label>
         <label class="radio-label">
-          <input type="radio" name="outputMode" value="custom" /> 自定义目录
+          <input type="radio" name="outputMode" value="custom" /> Custom directory
         </label>
         <input type="text" class="output-dir" placeholder="E:\\subtitles" disabled />
       </div>
       <details class="advanced">
-        <summary>高级选项</summary>
+        <summary>Advanced Options</summary>
         <div class="field">
-          <label for="max-len">单条字幕最大字符数（留空使用默认）</label>
+          <label for="max-len">Max characters per subtitle line (leave blank for default)</label>
           <input type="number" id="max-len" class="max-len" min="1" />
         </div>
       </details>
-      <button type="button" class="btn-primary start-btn">开始转录</button>
+      <button type="button" class="btn-primary start-btn">Start Transcription</button>
       <div class="form-error"></div>
     </div>
   `
@@ -59,55 +63,89 @@ export function mountJobConfigPanel(root: HTMLElement, onJobCreated: () => void)
     })
   })
 
-  selectedVideo.subscribe((video) => {
-    selectedVideoEl.textContent = video ? video.path : '未选择'
+  selectedVideos.subscribe((videos) => {
+    if (videos.length === 0) {
+      selectedVideoEl.textContent = 'No videos selected'
+    } else if (videos.length > 5) {
+      selectedVideoEl.textContent = `${videos.length} videos selected`
+    } else {
+      selectedVideoEl.textContent = videos.map((v) => v.name).join(', ')
+    }
   })
 
-  async function loadOptions(): Promise<void> {
-    const [models, languages] = await Promise.all([api.models(), api.languages()])
+  async function loadModels(): Promise<void> {
+    const models = await api.models()
     modelSelect.innerHTML = models.map((m: Model) => `<option value="${m.id}">${m.label}</option>`).join('')
+    formError.textContent =
+      models.length === 0 ? 'No model files detected — put a ggml-*.bin file in the models directory and refresh' : ''
+  }
+
+  async function loadLanguages(): Promise<void> {
+    const languages = await api.languages()
     languageSelect.innerHTML = languages
       .map((l: Language) => `<option value="${l.code}">${l.label}</option>`)
       .join('')
-    if (models.length === 0) {
-      formError.textContent = '未检测到任何模型文件，请将 ggml-*.bin 放入 models 目录后刷新页面'
-    }
   }
 
   startBtn.addEventListener('click', async () => {
     formError.textContent = ''
 
-    const video = selectedVideo.get()
-    if (!video) {
-      formError.textContent = '请先在左侧选择一个视频文件'
+    const videos = selectedVideos.get()
+    if (videos.length === 0) {
+      formError.textContent = 'Select at least one video file on the left first'
       return
     }
     if (!modelSelect.value) {
-      formError.textContent = '请先选择模型'
+      formError.textContent = 'Select a model first'
       return
     }
 
     const outputMode = getOutputMode()
     const maxLenValue = maxLenInput.value.trim()
+    const language = languageSelect.value || 'auto'
+    const outputDir = outputMode === 'custom' ? outputDirInput.value.trim() : undefined
+    const maxLen = maxLenValue ? Number(maxLenValue) : undefined
 
     startBtn.disabled = true
     try {
-      const res = await api.createJob({
-        videoPath: video.path,
-        modelId: modelSelect.value,
-        language: languageSelect.value || 'auto',
-        outputMode,
-        outputDir: outputMode === 'custom' ? outputDirInput.value.trim() : undefined,
-        maxLen: maxLenValue ? Number(maxLenValue) : undefined,
+      const results = await Promise.allSettled(
+        videos.map((video) =>
+          api.createJob({
+            videoPath: video.path,
+            modelId: modelSelect.value,
+            language,
+            outputMode,
+            outputDir,
+            maxLen,
+          }),
+        ),
+      )
+
+      const newTabs: TabInfo[] = []
+      const errors: string[] = []
+      results.forEach((result, i) => {
+        if (result.status === 'fulfilled') {
+          newTabs.push({ id: result.value.jobId, videoName: videos[i].name })
+        } else {
+          const message = result.reason instanceof Error ? result.reason.message : String(result.reason)
+          errors.push(`${videos[i].name}: ${message}`)
+        }
       })
-      activeJobId.set(res.jobId)
-      onJobCreated()
-    } catch (err) {
-      formError.textContent = err instanceof Error ? err.message : String(err)
+
+      if (newTabs.length > 0) {
+        openTabs.set([...openTabs.get(), ...newTabs])
+        activeTabId.set(newTabs[0].id)
+        onJobCreated()
+      }
+      formError.textContent = errors.join('; ')
+      selectedVideos.set([])
     } finally {
       startBtn.disabled = false
     }
   })
 
-  loadOptions()
+  loadModels()
+  loadLanguages()
+
+  return { refreshModels: loadModels }
 }

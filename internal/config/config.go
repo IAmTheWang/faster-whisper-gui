@@ -5,6 +5,8 @@ package config
 import (
 	"os"
 	"path/filepath"
+
+	"faster-whisper-gui/internal/settings"
 )
 
 // Config holds resolved absolute paths to everything the server needs on
@@ -24,6 +26,11 @@ type Config struct {
 	WhisperCliPath string // bin/whisper/whisper-cli.exe
 	FfmpegPath     string // bin/ffmpeg/ffmpeg.exe
 	FfprobePath    string // bin/ffmpeg/ffprobe.exe
+
+	// Settings holds user overrides for the paths above, saved from the web
+	// UI. Use the Effective* methods, not the fields above directly, when
+	// resolving what path to actually use.
+	Settings *settings.Store
 }
 
 // Load resolves a Config rooted at root (pass "" to use the directory
@@ -58,7 +65,60 @@ func Load(root string) (*Config, error) {
 		}
 	}
 
+	settingsStore, err := settings.Load(filepath.Join(root, "settings.json"))
+	if err != nil {
+		return nil, err
+	}
+	cfg.Settings = settingsStore
+
 	return cfg, nil
+}
+
+// EffectiveFfmpegPath returns the user-configured ffmpeg.exe override if
+// one is set, else the conventional bin/ffmpeg/ffmpeg.exe default.
+func (c *Config) EffectiveFfmpegPath() string {
+	if p := c.Settings.Get().FfmpegPath; p != "" {
+		return p
+	}
+	return c.FfmpegPath
+}
+
+// EffectiveFfprobePath returns ffprobe.exe next to the overridden
+// ffmpeg.exe (ffmpeg distributions always ship both binaries side by side),
+// or the conventional bin/ffmpeg/ffprobe.exe default if ffmpeg isn't
+// overridden.
+func (c *Config) EffectiveFfprobePath() string {
+	if p := c.Settings.Get().FfmpegPath; p != "" {
+		return filepath.Join(filepath.Dir(p), "ffprobe.exe")
+	}
+	return c.FfprobePath
+}
+
+// EffectiveWhisperCliPath returns the user-configured whisper-cli.exe
+// override if one is set, else the conventional
+// bin/whisper/whisper-cli.exe default.
+func (c *Config) EffectiveWhisperCliPath() string {
+	if p := c.Settings.Get().WhisperCliPath; p != "" {
+		return p
+	}
+	return c.WhisperCliPath
+}
+
+// EffectiveModelsDir returns the user-configured models directory override
+// if one is set, else the conventional models/ default.
+func (c *Config) EffectiveModelsDir() string {
+	if d := c.Settings.Get().ModelsDir; d != "" {
+		return d
+	}
+	return c.ModelsDir
+}
+
+// EffectiveDefaultVideoDir returns the user-configured directory the video
+// picker should open to on load, or "" if none is set — there is no
+// conventional default here (unlike the other Effective* methods), since
+// the video picker falls back to listing drives when this is unset.
+func (c *Config) EffectiveDefaultVideoDir() string {
+	return c.Settings.Get().DefaultVideoDir
 }
 
 // CleanTmpDir removes any leftover files from a previous run that crashed

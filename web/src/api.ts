@@ -6,7 +6,7 @@ export interface Drive {
 export interface Entry {
   name: string
   path: string
-  type: 'dir' | 'video'
+  type: 'dir' | 'video' | 'file'
   size: number
   modTime: number
 }
@@ -15,6 +15,25 @@ export interface Listing {
   path: string
   parent?: string
   entries: Entry[]
+}
+
+export type BrowseKind = 'video' | 'exe' | 'dir'
+
+export interface SettingsPaths {
+  ffmpegPath: string
+  whisperCliPath: string
+  modelsDir: string
+  defaultVideoDir: string
+  ffmpegDefault: string
+  whisperCliDefault: string
+  modelsDirDefault: string
+}
+
+export interface UpdateSettingsRequest {
+  ffmpegPath?: string
+  whisperCliPath?: string
+  modelsDir?: string
+  defaultVideoDir?: string
 }
 
 export interface Model {
@@ -106,11 +125,21 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
 export const api = {
   health: () => request<HealthResponse>('/api/health'),
   drives: () => request<Drive[]>('/api/drives'),
-  browse: (path: string) => request<Listing>(`/api/browse?path=${encodeURIComponent(path)}`),
+  browse: (path: string, kind: BrowseKind = 'video') =>
+    request<Listing>(`/api/browse?path=${encodeURIComponent(path)}&kind=${kind}`),
   models: () => request<Model[]>('/api/models'),
   languages: () => request<Language[]>('/api/languages'),
   jobs: () => request<Job[]>('/api/jobs'),
   job: (id: string) => request<Job>(`/api/jobs/${encodeURIComponent(id)}`),
+  settings: () => request<SettingsPaths>('/api/settings'),
+
+  updateSettings(body: UpdateSettingsRequest): Promise<SettingsPaths> {
+    return request<SettingsPaths>('/api/settings', {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(body),
+    })
+  },
 
   createJob(body: CreateJobRequest): Promise<CreateJobResponse> {
     return request<CreateJobResponse>('/api/jobs', {
@@ -126,6 +155,18 @@ export const api = {
       throw new Error(await errorMessageFrom(res))
     }
   },
+
+  exportJob(id: string, destDir: string): Promise<ExportJobResponse> {
+    return request<ExportJobResponse>(`/api/jobs/${encodeURIComponent(id)}/export`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ destDir }),
+    })
+  },
+}
+
+export interface ExportJobResponse {
+  destPath: string
 }
 
 export interface ProgressEventData {

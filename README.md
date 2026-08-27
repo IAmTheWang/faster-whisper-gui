@@ -22,6 +22,8 @@ models/ggml-small.bin
 
 `bin/`, `models/`, and `tmp/` are not shipped with the repo (see `.gitignore`) — they're created automatically as empty directories the first time the server starts.
 
+If ffmpeg, whisper-cli, or your models already live elsewhere and you'd rather not copy them into this program's own folder, you don't have to use the layout above at all — open the web UI and set each path individually in the "环境设置" (Settings) panel (browse the local disk with the "浏览" button, or type a full path directly). Saved overrides persist across restarts; anything left unset keeps using the conventional directory above as its default.
+
 ## Build
 
 ```bash

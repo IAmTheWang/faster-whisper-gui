@@ -16,7 +16,7 @@ type healthResponse struct {
 func (s *Server) handleHealth(w http.ResponseWriter, r *http.Request) {
 	ctx := r.Context()
 	writeJSON(w, http.StatusOK, healthResponse{
-		Ffmpeg:     transcribe.CheckFfmpeg(ctx, s.Config.FfmpegPath),
-		WhisperCli: transcribe.CheckWhisperCli(ctx, s.Config.WhisperCliPath),
+		Ffmpeg:     transcribe.CheckFfmpeg(ctx, s.Config.EffectiveFfmpegPath()),
+		WhisperCli: transcribe.CheckWhisperCli(ctx, s.Config.EffectiveWhisperCliPath()),
 	})
 }

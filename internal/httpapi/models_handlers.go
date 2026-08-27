@@ -7,7 +7,7 @@ import (
 )
 
 func (s *Server) handleModels(w http.ResponseWriter, r *http.Request) {
-	models, err := transcribe.ScanModels(s.Config.ModelsDir)
+	models, err := transcribe.ScanModels(s.Config.EffectiveModelsDir())
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, err)
 		return
@@ -28,7 +28,7 @@ type Language struct {
 // languages is a small curated list, not an exhaustive one — whisper.cpp
 // supports far more, but the UI only needs common ones plus auto-detect.
 var languages = []Language{
-	{"auto", "自动检测"},
+	{"auto", "Auto-detect"},
 	{"en", "English"},
 	{"zh", "中文"},
 	{"ja", "日本語"},

@@ -7,6 +7,7 @@ package fsbrowse
 
 import (
 	"fmt"
+	"io"
 	"os"
 	"path/filepath"
 	"sort"
@@ -32,6 +33,12 @@ var videoExtensions = map[string]bool{
 // IsVideoFile reports whether path's extension looks like a video container.
 func IsVideoFile(path string) bool {
 	return videoExtensions[strings.ToLower(filepath.Ext(path))]
+}
+
+// IsExeFile reports whether path has a .exe extension — used when browsing
+// for ffmpeg.exe/whisper-cli.exe overrides (see the Settings panel).
+func IsExeFile(path string) bool {
+	return strings.ToLower(filepath.Ext(path)) == ".exe"
 }
 
 // ListDrives enumerates the available drive letters.
@@ -101,6 +108,19 @@ type Listing struct {
 // callers (the HTTP handler, via ValidateAbsDir) are responsible for
 // normalizing/validating untrusted input before it reaches here.
 func List(dir string) (Listing, error) {
+	return ListFiltered(dir, IsVideoFile, "video")
+}
+
+// ListFiltered returns dir's subdirectories plus files for which match
+// returns true (tagged with fileType), directories first then alphabetical.
+// Pass a match func that always returns false to get a directories-only
+// listing, e.g. for picking the models directory override rather than a
+// file within it.
+//
+// dir must already be an absolute, cleaned, existing directory path —
+// callers (the HTTP handler, via ValidateAbsDir) are responsible for
+// normalizing/validating untrusted input before it reaches here.
+func ListFiltered(dir string, match func(name string) bool, fileType string) (Listing, error) {
 	dirEntries, err := os.ReadDir(dir)
 	if err != nil {
 		return Listing{}, fmt.Errorf("read dir %s: %w", dir, err)
@@ -119,7 +139,7 @@ func List(dir string) (Listing, error) {
 			listing.Entries = append(listing.Entries, Entry{Name: name, Path: full, Type: "dir"})
 			continue
 		}
-		if !IsVideoFile(name) {
+		if !match(name) {
 			continue
 		}
 		fi, err := de.Info()
@@ -129,7 +149,7 @@ func List(dir string) (Listing, error) {
 		listing.Entries = append(listing.Entries, Entry{
 			Name:    name,
 			Path:    full,
-			Type:    "video",
+			Type:    fileType,
 			Size:    fi.Size(),
 			ModTime: fi.ModTime().UnixMilli(),
 		})
@@ -167,6 +187,22 @@ func ValidateAbsDir(p string) (string, error) {
 // ValidateVideoFile normalizes p and ensures it's an absolute path to an
 // existing regular file with a recognized video extension.
 func ValidateVideoFile(p string) (string, error) {
+	return validateFile(p, IsVideoFile, "does not have a recognized video extension")
+}
+
+// ValidateExeFile normalizes p and ensures it's an absolute path to an
+// existing regular file with a .exe extension — used to validate the
+// ffmpeg.exe/whisper-cli.exe path overrides saved from the Settings panel.
+func ValidateExeFile(p string) (string, error) {
+	return validateFile(p, IsExeFile, "is not a .exe file")
+}
+
+// validateFile is the shared normalize-then-stat body behind
+// ValidateVideoFile/ValidateExeFile: clean p (handling mixed / and \
+// separators from a hand-typed field), require it to be absolute, existing,
+// a regular file (not a directory), and satisfy match — otherwise return an
+// error using what to describe the mismatch.
+func validateFile(p string, match func(string) bool, what string) (string, error) {
 	clean := filepath.Clean(filepath.FromSlash(p))
 	if !filepath.IsAbs(clean) {
 		return "", fmt.Errorf("path %q is not absolute", p)
@@ -176,10 +212,10 @@ func ValidateVideoFile(p string) (string, error) {
 		return "", err
 	}
 	if info.IsDir() {
-		return "", fmt.Errorf("%q is a directory, not a video file", clean)
+		return "", fmt.Errorf("%q is a directory, not a file", clean)
 	}
-	if !IsVideoFile(clean) {
-		return "", fmt.Errorf("%q does not have a recognized video extension", clean)
+	if !match(clean) {
+		return "", fmt.Errorf("%q %s", clean, what)
 	}
 	return clean, nil
 }
@@ -197,4 +233,26 @@ func EnsureWritable(path string) error {
 		return err
 	}
 	return f.Close()
+}
+
+// CopyFile copies src to dst, creating or truncating dst. Used by the job
+// "export" endpoint to duplicate an already-generated SRT into a
+// user-chosen folder on demand, without touching the original.
+func CopyFile(src, dst string) error {
+	in, err := os.Open(src)
+	if err != nil {
+		return err
+	}
+	defer in.Close()
+
+	out, err := os.OpenFile(dst, os.O_WRONLY|os.O_CREATE|os.O_TRUNC, 0o666)
+	if err != nil {
+		return err
+	}
+	defer out.Close()
+
+	if _, err := io.Copy(out, in); err != nil {
+		return err
+	}
+	return out.Close()
 }

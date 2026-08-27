@@ -33,13 +33,13 @@ func New(cfg *config.Config) (*http.Server, error) {
 
 	store := job.NewStore()
 	broker := sseutil.NewBroker()
-	engine := &transcribe.WhisperCppEngine{CliPath: cfg.WhisperCliPath}
+	engine := &transcribe.WhisperCppEngine{CliPath: cfg.EffectiveWhisperCliPath}
 	pipeline := job.Pipeline{
 		ExtractAudio: func(ctx context.Context, videoPath, outWavPath string) error {
-			return transcribe.ExtractAudio(ctx, cfg.FfmpegPath, videoPath, outWavPath)
+			return transcribe.ExtractAudio(ctx, cfg.EffectiveFfmpegPath(), videoPath, outWavPath)
 		},
 		ProbeDuration: func(ctx context.Context, videoPath string) (time.Duration, error) {
-			return transcribe.ProbeDuration(ctx, cfg.FfprobePath, videoPath)
+			return transcribe.ProbeDuration(ctx, cfg.EffectiveFfprobePath(), videoPath)
 		},
 		TmpDir: cfg.TmpDir,
 		Engine: engine,

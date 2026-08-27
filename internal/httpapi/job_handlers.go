@@ -3,6 +3,7 @@ package httpapi
 import (
 	"encoding/json"
 	"net/http"
+	"path/filepath"
 
 	"faster-whisper-gui/internal/fsbrowse"
 	"faster-whisper-gui/internal/job"
@@ -36,7 +37,7 @@ func (s *Server) handleCreateJob(w http.ResponseWriter, r *http.Request) {
 
 	videoPath, err := fsbrowse.ValidateVideoFile(req.VideoPath)
 	if err != nil {
-		writeErrorMsg(w, http.StatusBadRequest, "视频路径无效: "+err.Error())
+		writeErrorMsg(w, http.StatusBadRequest, "invalid video path: "+err.Error())
 		return
 	}
 
@@ -52,15 +53,15 @@ func (s *Server) handleCreateJob(w http.ResponseWriter, r *http.Request) {
 	case job.OutputCustom:
 		outputDir, err = fsbrowse.ValidateAbsDir(req.OutputDir)
 		if err != nil {
-			writeErrorMsg(w, http.StatusBadRequest, "输出目录无效: "+err.Error())
+			writeErrorMsg(w, http.StatusBadRequest, "invalid output directory: "+err.Error())
 			return
 		}
 	default:
-		writeErrorMsg(w, http.StatusBadRequest, "未知的 outputMode: "+req.OutputMode)
+		writeErrorMsg(w, http.StatusBadRequest, "unknown outputMode: "+req.OutputMode)
 		return
 	}
 
-	models, err := transcribe.ScanModels(s.Config.ModelsDir)
+	models, err := transcribe.ScanModels(s.Config.EffectiveModelsDir())
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, err)
 		return
@@ -73,7 +74,7 @@ func (s *Server) handleCreateJob(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 	if modelPath == "" {
-		writeErrorMsg(w, http.StatusBadRequest, "未找到模型: "+req.ModelID)
+		writeErrorMsg(w, http.StatusBadRequest, "model not found: "+req.ModelID)
 		return
 	}
 
@@ -89,7 +90,7 @@ func (s *Server) handleCreateJob(w http.ResponseWriter, r *http.Request) {
 
 	srtPath := job.OutputPrefix(jobReq) + ".srt"
 	if err := fsbrowse.EnsureWritable(srtPath); err != nil {
-		writeErrorMsg(w, http.StatusConflict, "目标字幕文件不可写（可能正被播放器占用）: "+err.Error())
+		writeErrorMsg(w, http.StatusConflict, "target subtitle file is not writable (it may be open in a media player): "+err.Error())
 		return
 	}
 
@@ -127,4 +128,48 @@ func (s *Server) handleCancelJob(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	w.WriteHeader(http.StatusAccepted)
+}
+
+type exportJobRequest struct {
+	DestDir string `json:"destDir"`
+}
+
+type exportJobResponse struct {
+	DestPath string `json:"destPath"`
+}
+
+// handleExportJob copies an already-finished job's SRT into a user-chosen
+// folder, on top of the automatic write it already got next to the video
+// (or its custom output dir) when the job completed. This is an additive
+// "save a copy" action, not a replacement for that automatic write.
+func (s *Server) handleExportJob(w http.ResponseWriter, r *http.Request) {
+	id := r.PathValue("id")
+	j, ok := s.Store.Get(id)
+	if !ok {
+		writeErrorMsg(w, http.StatusNotFound, "job not found")
+		return
+	}
+	if j.Status != job.StatusDone {
+		writeErrorMsg(w, http.StatusConflict, "job has not finished yet")
+		return
+	}
+
+	var req exportJobRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		writeErrorMsg(w, http.StatusBadRequest, "invalid JSON body: "+err.Error())
+		return
+	}
+	destDir, err := fsbrowse.ValidateAbsDir(req.DestDir)
+	if err != nil {
+		writeErrorMsg(w, http.StatusBadRequest, "invalid destination directory: "+err.Error())
+		return
+	}
+
+	destPath := filepath.Join(destDir, filepath.Base(j.SRTPath))
+	if err := fsbrowse.CopyFile(j.SRTPath, destPath); err != nil {
+		writeErrorMsg(w, http.StatusConflict, "could not copy subtitle file: "+err.Error())
+		return
+	}
+
+	writeJSON(w, http.StatusOK, exportJobResponse{DestPath: destPath})
 }

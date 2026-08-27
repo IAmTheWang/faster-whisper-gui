@@ -1,17 +1,20 @@
 :root {
-  --bg: #0f1115;
-  --panel-bg: #171a21;
-  --panel-border: #262b36;
-  --text: #e6e8ec;
-  --text-dim: #9aa3b2;
-  --accent: #4f8cff;
-  --accent-dim: #2c3a57;
-  --success: #3ecf8e;
-  --error: #ef5757;
-  --warning: #e6b450;
+  --bg: #f5f6f8;
+  --panel-bg: #ffffff;
+  --panel-border: #dde1e8;
+  --text: #1a1d23;
+  --text-dim: #667085;
+  --accent: #2f6fed;
+  --accent-dim: #dbe8ff;
+  --success: #1a9c6b;
+  --error: #d64545;
+  --warning: #b98900;
+  --input-bg: #f0f2f5;
+  --hover-bg: #eef1f5;
+  --btn-secondary-bg: #e5e8ee;
   --radius: 8px;
 
-  color-scheme: dark;
+  color-scheme: light;
 }
 
 * {
@@ -49,7 +52,7 @@ body {
 
 .health-banner {
   flex: 1;
-  background: rgba(239, 87, 87, 0.12);
+  background: rgba(214, 69, 69, 0.1);
   border: 1px solid var(--error);
   color: var(--error);
   padding: 6px 12px;
@@ -100,7 +103,7 @@ body {
 .output-dir,
 .max-len {
   width: 100%;
-  background: #10131a;
+  background: var(--input-bg);
   color: var(--text);
   border: 1px solid var(--panel-border);
   border-radius: 6px;
@@ -152,7 +155,7 @@ body {
 }
 
 .entry:hover {
-  background: #1d2129;
+  background: var(--hover-bg);
 }
 
 .entry-video.selected {
@@ -170,6 +173,45 @@ body {
 
 .entry-error {
   color: var(--error);
+}
+
+/* settings panel */
+
+.settings-row {
+  display: flex;
+  gap: 8px;
+}
+
+.settings-input {
+  flex: 1;
+  background: var(--input-bg);
+  color: var(--text);
+  border: 1px solid var(--panel-border);
+  border-radius: 6px;
+  padding: 6px 8px;
+  font-size: 13px;
+}
+
+.settings-picker {
+  border: 1px solid var(--panel-border);
+  border-radius: 6px;
+  padding: 10px;
+  margin-bottom: 12px;
+}
+
+.settings-picker .entry-list {
+  max-height: 240px;
+}
+
+.settings-picker-actions {
+  display: flex;
+  justify-content: space-between;
+  margin-top: 8px;
+}
+
+.settings-actions {
+  display: flex;
+  gap: 8px;
 }
 
 /* job config panel */
@@ -239,7 +281,7 @@ body {
 }
 
 .btn-secondary {
-  background: #2a2f3a;
+  background: var(--btn-secondary-bg);
   color: var(--text);
 }
 
@@ -250,7 +292,84 @@ body {
   min-height: 1em;
 }
 
+/* directory browser selection bar */
+
+.selection-bar {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 8px;
+  font-size: 12px;
+  color: var(--text-dim);
+}
+
+.video-checkbox {
+  margin-right: 8px;
+}
+
 /* progress panel */
+
+.progress-tabs {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin-bottom: 10px;
+}
+
+.progress-tab {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  max-width: 160px;
+  padding: 4px 8px;
+  border: 1px solid var(--panel-border);
+  border-radius: 6px;
+  background: var(--input-bg);
+  color: var(--text);
+  cursor: pointer;
+  font-size: 12px;
+}
+
+.progress-tab span:first-child {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.progress-tab.active {
+  border-color: var(--accent);
+  background: var(--accent-dim);
+  color: var(--accent);
+}
+
+.progress-tab-close {
+  color: var(--text-dim);
+  cursor: pointer;
+}
+
+.progress-tab-close:hover {
+  color: var(--error);
+}
+
+.progress-save-actions {
+  display: flex;
+  gap: 8px;
+  margin-top: 8px;
+}
+
+.save-status {
+  font-size: 12px;
+  margin-top: 6px;
+  word-break: break-all;
+}
+
+.save-status.success {
+  color: var(--success);
+}
+
+.save-status.error {
+  color: var(--error);
+}
 
 .progress-empty {
   color: var(--text-dim);
@@ -259,7 +378,7 @@ body {
 
 .progress-bar {
   height: 10px;
-  background: #10131a;
+  background: var(--input-bg);
   border-radius: 999px;
   overflow: hidden;
   margin-bottom: 8px;
@@ -318,7 +437,7 @@ body {
 }
 
 .job-item:hover {
-  background: #1d2129;
+  background: var(--hover-bg);
 }
 
 .job-item.active {

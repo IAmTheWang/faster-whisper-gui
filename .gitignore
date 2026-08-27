@@ -9,6 +9,9 @@
 /models/
 /tmp/
 
+# user-specific path overrides saved from the Settings panel
+/settings.json
+
 # frontend
 /web/node_modules/
 /web/dist/

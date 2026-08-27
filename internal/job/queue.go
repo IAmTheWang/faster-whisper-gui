@@ -87,7 +87,7 @@ func (q *Queue) process(j *Job) {
 	tmpWav := filepath.Join(q.pipeline.TmpDir, j.ID+".wav")
 	defer os.Remove(tmpWav)
 
-	q.setStatus(j.ID, StatusExtractingAudio, 0, "正在提取音频")
+	q.setStatus(j.ID, StatusExtractingAudio, 0, "Extracting audio")
 	if err := q.pipeline.ExtractAudio(ctx, j.Request.VideoPath, tmpWav); err != nil {
 		q.finishWithError(j.ID, ctx, err)
 		return
@@ -99,7 +99,7 @@ func (q *Queue) process(j *Job) {
 		return
 	}
 
-	q.setStatus(j.ID, StatusTranscribing, 0, "正在转录")
+	q.setStatus(j.ID, StatusTranscribing, 0, "Transcribing")
 	opts := transcribe.Options{
 		AudioPath:     tmpWav,
 		ModelPath:     j.Request.ModelPath,
