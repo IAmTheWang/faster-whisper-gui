@@ -35,7 +35,7 @@ export function mountSettingsPanel(root: HTMLElement, onSaved: () => void): void
         </div>
       </div>
       <div class="field">
-        <label>Default Video Directory</label>
+        <label>Default Media Directory</label>
         <div class="settings-row">
           <input type="text" class="settings-input" data-field="defaultVideoDir" placeholder="Not set — lists all drives by default" />
           <button type="button" class="btn-secondary browse-btn" data-field="defaultVideoDir" data-kind="dir">Browse</button>

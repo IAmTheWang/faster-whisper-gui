@@ -2,7 +2,7 @@ English | [简体中文](README.zh-CN.md)
 
 # faster-whisper-gui
 
-A local, single-user subtitle transcription tool: Go backend + Vite/TypeScript frontend, using whisper.cpp to transcribe videos into SRT subtitles, saved next to the source video by default.
+A local, single-user subtitle transcription tool: Go backend + Vite/TypeScript frontend, using whisper.cpp to transcribe video or audio files into SRT subtitles, saved next to each source file by default.
 
 ## Prerequisites
 
@@ -22,7 +22,7 @@ models/ggml-small.bin
 
 `bin/`, `models/`, and `tmp/` are not shipped with the repo (see `.gitignore`) — they're created automatically as empty directories the first time the server starts.
 
-If ffmpeg, whisper-cli, or your models already live elsewhere and you'd rather not copy them into this program's own folder, you don't have to use the layout above at all — open the web UI and set each path individually in the "环境设置" (Settings) panel (browse the local disk with the "浏览" button, or type a full path directly). Saved overrides persist across restarts; anything left unset keeps using the conventional directory above as its default.
+If ffmpeg, whisper-cli, or your models already live elsewhere and you'd rather not copy them into this program's own folder, you don't have to use the layout above at all — open the web UI and set each path individually in the **Environment Settings** panel (browse the local disk with the "Browse" button, or type a full path directly). You can also set a default directory to open the media picker in. Saved overrides persist across restarts (in `settings.json` next to the executable); anything left unset keeps using the conventional directory above as its default.
 
 ## Build
 
@@ -46,6 +46,13 @@ Listens on `http://127.0.0.1:8080` by default (loopback only, never exposed to t
 
 - `-addr <host:port>`: override the listen address
 - `-root <dir>`: override the directory containing `bin/`, `models/`, `tmp/` (defaults to the executable's own directory)
+
+## Usage
+
+1. **Select Media** — browse to one or more video or audio files and check the box next to each one you want transcribed. Selections persist as you navigate between folders.
+2. **Transcription Settings** — pick a model and language once; this configuration is shared by every checked file in the batch (there's no per-file config). Choose the default "same directory as the source file" output, or a custom output directory. Click **Start Transcription** to queue a job for each checked file.
+3. **Progress** — each running or finished job gets its own tab, so you can watch several files' transcriptions at a glance. Jobs still process one at a time under the hood (see [Architecture](#architecture-at-a-glance)); background tabs keep updating live even while you're looking at a different one. Once a job is done, use **Save** to copy that job's `.srt` to another folder, or **Save All Completed** to copy every finished job's `.srt` in the batch to one folder in one click — this is purely an extra copy, the original `.srt` next to the source file (or in your chosen output directory) is written the moment the job finishes either way.
+4. **Job History** — every job ever run this session, click one to reopen (or jump back to) its Progress tab.
 
 ## Development
 
@@ -77,10 +84,12 @@ go test ./...
 ## Architecture at a glance
 
 - **Transcription engine**: whisper.cpp, invoked as a subprocess (`whisper-cli.exe`) rather than Python's faster-whisper — a local single-user Go tool doesn't need a Python/CUDA userland to install.
-- **Video selection**: a server-side file browser (`GET /api/browse`), because a browser's native file picker/drag-and-drop can't hand back an absolute local path, and saving next to the source video by default requires that absolute path.
+- **Media selection**: a server-side file browser (`GET /api/browse`), because a browser's native file picker/drag-and-drop can't hand back an absolute local path, and saving next to the source file by default requires that absolute path.
+- **Batch jobs, serial execution**: you can check and start several video/audio files at once, sharing one model/language/output config, but they're queued and run one at a time — a single GPU can't usefully run concurrent whisper-cli processes. The Progress panel's tabs just let you monitor several jobs' states side by side, not run them in parallel.
 - **Progress reporting**: SSE (`GET /api/jobs/{id}/events`), primarily derived from whisper-cli's own per-segment timestamps, supplemented by its built-in percentage output.
+- **Save is additive**: the `.srt` is always written to its real destination the moment a job finishes, exactly as before; "Save"/"Save All Completed" (`POST /api/jobs/{id}/export`) just copies an already-finished job's `.srt` to a second location on demand.
 - **Process robustness**: ffmpeg/whisper-cli subprocesses are managed through a Windows Job Object, so canceling a job or the server itself crashing never leaves an orphaned process behind.
-- See the comments throughout each package for more design rationale.
+- See `CLAUDE.md` (and the `CLAUDE.md` in each package/directory) for the full design rationale behind each of these.
 
 ## Known limitations
 

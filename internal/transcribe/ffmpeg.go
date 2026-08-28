@@ -13,13 +13,15 @@ import (
 )
 
 // ExtractAudioArgs builds the ffmpeg argv (excluding the "ffmpeg" program
-// name) that extracts and resamples videoPath's audio track into a 16kHz
+// name) that extracts and resamples mediaPath's audio track into a 16kHz
 // mono 16-bit PCM WAV file at outWavPath, overwriting any existing file.
-// whisper.cpp requires exactly this format as input.
-func ExtractAudioArgs(videoPath, outWavPath string) []string {
+// whisper.cpp requires exactly this format as input. mediaPath may be a
+// video or an audio-only file — "-vn" (no video output) is a harmless no-op
+// when the input has no video stream to drop.
+func ExtractAudioArgs(mediaPath, outWavPath string) []string {
 	return []string{
 		"-y",
-		"-i", videoPath,
+		"-i", mediaPath,
 		"-vn",
 		"-ar", "16000",
 		"-ac", "1",
@@ -28,12 +30,12 @@ func ExtractAudioArgs(videoPath, outWavPath string) []string {
 	}
 }
 
-// ExtractAudio runs ffmpeg to produce outWavPath from videoPath. The
+// ExtractAudio runs ffmpeg to produce outWavPath from mediaPath. The
 // subprocess is bound to a Job Object so a canceled context can't leave an
 // orphaned ffmpeg process behind. On failure, the returned error includes
 // the tail of ffmpeg's stderr output.
-func ExtractAudio(ctx context.Context, ffmpegPath, videoPath, outWavPath string) error {
-	cmd := exec.CommandContext(ctx, ffmpegPath, ExtractAudioArgs(videoPath, outWavPath)...)
+func ExtractAudio(ctx context.Context, ffmpegPath, mediaPath, outWavPath string) error {
+	cmd := exec.CommandContext(ctx, ffmpegPath, ExtractAudioArgs(mediaPath, outWavPath)...)
 	var stderr bytes.Buffer
 	cmd.Stderr = &stderr
 
@@ -52,18 +54,18 @@ func ExtractAudio(ctx context.Context, ffmpegPath, videoPath, outWavPath string)
 // ProbeDurationArgs builds the ffprobe argv that prints just the input's
 // duration in seconds as a bare float to stdout (no headers, no extra
 // formatting), so the caller can parse it directly.
-func ProbeDurationArgs(videoPath string) []string {
+func ProbeDurationArgs(mediaPath string) []string {
 	return []string{
 		"-v", "error",
 		"-show_entries", "format=duration",
 		"-of", "default=noprint_wrappers=1:nokey=1",
-		videoPath,
+		mediaPath,
 	}
 }
 
-// ProbeDuration runs ffprobe and returns videoPath's duration.
-func ProbeDuration(ctx context.Context, ffprobePath, videoPath string) (time.Duration, error) {
-	cmd := exec.CommandContext(ctx, ffprobePath, ProbeDurationArgs(videoPath)...)
+// ProbeDuration runs ffprobe and returns mediaPath's duration.
+func ProbeDuration(ctx context.Context, ffprobePath, mediaPath string) (time.Duration, error) {
+	cmd := exec.CommandContext(ctx, ffprobePath, ProbeDurationArgs(mediaPath)...)
 	var stdout, stderr bytes.Buffer
 	cmd.Stdout = &stdout
 	cmd.Stderr = &stderr

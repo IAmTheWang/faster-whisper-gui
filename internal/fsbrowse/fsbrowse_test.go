@@ -6,7 +6,7 @@ import (
 	"testing"
 )
 
-func TestIsVideoFile(t *testing.T) {
+func TestIsMediaFile(t *testing.T) {
 	tests := []struct {
 		name string
 		path string
@@ -15,14 +15,36 @@ func TestIsVideoFile(t *testing.T) {
 		{"mp4", `E:\v\a.mp4`, true},
 		{"uppercase extension", `E:\v\a.MP4`, true},
 		{"mkv", `E:\v\a.mkv`, true},
-		{"srt is not a video", `E:\v\a.srt`, false},
-		{"txt is not a video", `E:\v\a.txt`, false},
+		{"m4a is an audio file", `E:\v\a.m4a`, true},
+		{"mp3 is an audio file", `E:\v\a.mp3`, true},
+		{"uppercase audio extension", `E:\v\a.M4A`, true},
+		{"srt is not media", `E:\v\a.srt`, false},
+		{"txt is not media", `E:\v\a.txt`, false},
 		{"no extension", `E:\v\a`, false},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			if got := IsVideoFile(tt.path); got != tt.want {
-				t.Errorf("IsVideoFile(%q) = %v, want %v", tt.path, got, tt.want)
+			if got := IsMediaFile(tt.path); got != tt.want {
+				t.Errorf("IsMediaFile(%q) = %v, want %v", tt.path, got, tt.want)
+			}
+		})
+	}
+}
+
+func TestMediaKind(t *testing.T) {
+	tests := []struct {
+		name string
+		path string
+		want string
+	}{
+		{"mp4 is video", `E:\v\a.mp4`, "video"},
+		{"m4a is audio", `E:\v\a.m4a`, "audio"},
+		{"txt is neither", `E:\v\a.txt`, ""},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := MediaKind(tt.path); got != tt.want {
+				t.Errorf("MediaKind(%q) = %q, want %q", tt.path, got, tt.want)
 			}
 		})
 	}
@@ -56,7 +78,7 @@ func TestListFilteredDirsOnly(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	listing, err := ListFiltered(dir, func(string) bool { return false }, "")
+	listing, err := ListFiltered(dir, func(string) string { return "" })
 	if err != nil {
 		t.Fatalf("ListFiltered: %v", err)
 	}
@@ -70,7 +92,12 @@ func TestListFilteredExe(t *testing.T) {
 	mustWrite(t, filepath.Join(dir, "video.mp4"), "video")
 	mustWrite(t, filepath.Join(dir, "ffmpeg.exe"), "exe")
 
-	listing, err := ListFiltered(dir, IsExeFile, "file")
+	listing, err := ListFiltered(dir, func(name string) string {
+		if IsExeFile(name) {
+			return "file"
+		}
+		return ""
+	})
 	if err != nil {
 		t.Fatalf("ListFiltered: %v", err)
 	}
@@ -113,8 +140,9 @@ func TestList(t *testing.T) {
 
 	mustWrite(t, filepath.Join(dir, "b_video.mp4"), "video")
 	mustWrite(t, filepath.Join(dir, "a_video.mkv"), "video")
-	mustWrite(t, filepath.Join(dir, "notes.txt"), "not a video")
-	mustWrite(t, filepath.Join(dir, "readme.srt"), "not a video")
+	mustWrite(t, filepath.Join(dir, "c_audio.m4a"), "audio")
+	mustWrite(t, filepath.Join(dir, "notes.txt"), "not media")
+	mustWrite(t, filepath.Join(dir, "readme.srt"), "not media")
 	if err := os.Mkdir(filepath.Join(dir, "z_subdir"), 0o755); err != nil {
 		t.Fatal(err)
 	}
@@ -135,18 +163,18 @@ func TestList(t *testing.T) {
 		t.Errorf("Parent = %q, want %q", listing.Parent, wantParent)
 	}
 
-	if len(listing.Entries) != 4 {
-		t.Fatalf("Entries = %+v, want 4 entries (2 dirs + 2 videos, no .txt/.srt)", listing.Entries)
+	if len(listing.Entries) != 5 {
+		t.Fatalf("Entries = %+v, want 5 entries (2 dirs + 2 videos + 1 audio, no .txt/.srt)", listing.Entries)
 	}
 
-	// Directories first (alphabetical), then videos (alphabetical).
-	wantOrder := []string{"a_subdir", "z_subdir", "a_video.mkv", "b_video.mp4"}
+	// Directories first (alphabetical), then media files (alphabetical).
+	wantOrder := []string{"a_subdir", "z_subdir", "a_video.mkv", "b_video.mp4", "c_audio.m4a"}
 	for i, name := range wantOrder {
 		if listing.Entries[i].Name != name {
 			t.Errorf("Entries[%d].Name = %q, want %q", i, listing.Entries[i].Name, name)
 		}
 	}
-	if listing.Entries[0].Type != "dir" || listing.Entries[2].Type != "video" {
+	if listing.Entries[0].Type != "dir" || listing.Entries[2].Type != "video" || listing.Entries[4].Type != "audio" {
 		t.Errorf("unexpected entry types: %+v", listing.Entries)
 	}
 }
@@ -190,32 +218,42 @@ func TestValidateAbsDir(t *testing.T) {
 	}
 }
 
-func TestValidateVideoFile(t *testing.T) {
+func TestValidateMediaFile(t *testing.T) {
 	dir := t.TempDir()
 	video := filepath.Join(dir, "clip.mp4")
 	mustWrite(t, video, "video")
-	notVideo := filepath.Join(dir, "notes.txt")
-	mustWrite(t, notVideo, "text")
+	audio := filepath.Join(dir, "clip.m4a")
+	mustWrite(t, audio, "audio")
+	notMedia := filepath.Join(dir, "notes.txt")
+	mustWrite(t, notMedia, "text")
 
-	if _, err := ValidateVideoFile("relative\\clip.mp4"); err == nil {
+	if _, err := ValidateMediaFile("relative\\clip.mp4"); err == nil {
 		t.Error("expected error for relative path")
 	}
-	if _, err := ValidateVideoFile(filepath.Join(dir, "missing.mp4")); err == nil {
+	if _, err := ValidateMediaFile(filepath.Join(dir, "missing.mp4")); err == nil {
 		t.Error("expected error for nonexistent file")
 	}
-	if _, err := ValidateVideoFile(dir); err == nil {
+	if _, err := ValidateMediaFile(dir); err == nil {
 		t.Error("expected error when path is a directory")
 	}
-	if _, err := ValidateVideoFile(notVideo); err == nil {
-		t.Error("expected error for a non-video extension")
+	if _, err := ValidateMediaFile(notMedia); err == nil {
+		t.Error("expected error for a non-media extension")
 	}
 
-	got, err := ValidateVideoFile(video)
+	got, err := ValidateMediaFile(video)
 	if err != nil {
-		t.Fatalf("ValidateVideoFile(%q): %v", video, err)
+		t.Fatalf("ValidateMediaFile(%q): %v", video, err)
 	}
 	if got != filepath.Clean(video) {
 		t.Errorf("got %q, want %q", got, filepath.Clean(video))
+	}
+
+	gotAudio, err := ValidateMediaFile(audio)
+	if err != nil {
+		t.Fatalf("ValidateMediaFile(%q): %v", audio, err)
+	}
+	if gotAudio != filepath.Clean(audio) {
+		t.Errorf("got %q, want %q", gotAudio, filepath.Clean(audio))
 	}
 }
 

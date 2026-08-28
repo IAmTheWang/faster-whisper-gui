@@ -31,15 +31,15 @@ func (s Status) IsTerminal() bool {
 type OutputMode string
 
 const (
-	OutputSameAsVideo OutputMode = "same_as_video"
-	OutputCustom      OutputMode = "custom"
+	OutputSameAsSource OutputMode = "same_as_source"
+	OutputCustom       OutputMode = "custom"
 )
 
 // Request is the fully-validated input needed to run a transcription job.
 // Paths are already absolute and cleaned by the time a Request is
 // constructed (see httpapi's job handler).
 type Request struct {
-	VideoPath  string     `json:"videoPath"`
+	MediaPath  string     `json:"mediaPath"`
 	ModelID    string     `json:"modelId"`
 	ModelPath  string     `json:"-"` // local filesystem detail, not part of the public API shape
 	Language   string     `json:"language"`

@@ -9,23 +9,23 @@ func TestOutputPrefix(t *testing.T) {
 		want string
 	}{
 		{
-			name: "default same-as-video directory",
-			req:  Request{VideoPath: `E:\videos\lecture1.mp4`, OutputMode: OutputSameAsVideo},
+			name: "default same-as-source directory",
+			req:  Request{MediaPath: `E:\videos\lecture1.mp4`, OutputMode: OutputSameAsSource},
 			want: `E:\videos\lecture1`,
 		},
 		{
 			name: "custom output directory",
 			req: Request{
-				VideoPath:  `E:\videos\lecture1.mp4`,
+				MediaPath:  `E:\videos\lecture1.mp4`,
 				OutputMode: OutputCustom,
 				OutputDir:  `E:\srt-out`,
 			},
 			want: `E:\srt-out\lecture1`,
 		},
 		{
-			name: "custom mode but empty OutputDir falls back to video directory",
+			name: "custom mode but empty OutputDir falls back to source directory",
 			req: Request{
-				VideoPath:  `E:\videos\lecture1.mp4`,
+				MediaPath:  `E:\videos\lecture1.mp4`,
 				OutputMode: OutputCustom,
 				OutputDir:  "",
 			},
@@ -33,33 +33,33 @@ func TestOutputPrefix(t *testing.T) {
 		},
 		{
 			name: "path with spaces",
-			req:  Request{VideoPath: `E:\test videos\my clip.mp4`, OutputMode: OutputSameAsVideo},
+			req:  Request{MediaPath: `E:\test videos\my clip.mp4`, OutputMode: OutputSameAsSource},
 			want: `E:\test videos\my clip`,
 		},
 		{
 			name: "non-ASCII path",
-			req:  Request{VideoPath: `E:\test videos\日本語 sample (1).mp4`, OutputMode: OutputSameAsVideo},
+			req:  Request{MediaPath: `E:\test videos\日本語 sample (1).mp4`, OutputMode: OutputSameAsSource},
 			want: `E:\test videos\日本語 sample (1)`,
 		},
 		{
 			name: "multi-dot filename keeps all but the final extension",
-			req:  Request{VideoPath: `E:\videos\my.video.v2.mp4`, OutputMode: OutputSameAsVideo},
+			req:  Request{MediaPath: `E:\videos\my.video.v2.mp4`, OutputMode: OutputSameAsSource},
 			want: `E:\videos\my.video.v2`,
 		},
 		{
 			name: "uppercase extension",
-			req:  Request{VideoPath: `E:\videos\lecture1.MP4`, OutputMode: OutputSameAsVideo},
+			req:  Request{MediaPath: `E:\videos\lecture1.MP4`, OutputMode: OutputSameAsSource},
 			want: `E:\videos\lecture1`,
 		},
 		{
-			name: "forward slashes in video path get normalized",
-			req:  Request{VideoPath: `E:/videos/lecture1.mp4`, OutputMode: OutputSameAsVideo},
+			name: "forward slashes in media path get normalized",
+			req:  Request{MediaPath: `E:/videos/lecture1.mp4`, OutputMode: OutputSameAsSource},
 			want: `E:\videos\lecture1`,
 		},
 		{
 			name: "forward slashes in custom output dir get normalized",
 			req: Request{
-				VideoPath:  `E:\videos\lecture1.mp4`,
+				MediaPath:  `E:\videos\lecture1.mp4`,
 				OutputMode: OutputCustom,
 				OutputDir:  `E:/srt-out`,
 			},
@@ -67,7 +67,7 @@ func TestOutputPrefix(t *testing.T) {
 		},
 		{
 			name: "mixed slashes and redundant separators",
-			req:  Request{VideoPath: `E:/videos//sub\.\lecture1.mp4`, OutputMode: OutputSameAsVideo},
+			req:  Request{MediaPath: `E:/videos//sub\.\lecture1.mp4`, OutputMode: OutputSameAsSource},
 			want: `E:\videos\sub\lecture1`,
 		},
 	}

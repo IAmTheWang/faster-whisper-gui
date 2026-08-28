@@ -19,7 +19,7 @@ func (s *Server) handleDrives(w http.ResponseWriter, r *http.Request) {
 // param controls which files (besides subdirectories, always included)
 // show up in the listing:
 //
-//   - "" / "video" (default): video files — the original video-picker behavior.
+//   - "" / "media" (default): video/audio files — the original media-picker behavior.
 //   - "exe": .exe files — used by the Settings panel to browse for
 //     ffmpeg.exe/whisper-cli.exe.
 //   - "dir": no files at all — used by the Settings panel to browse for the
@@ -40,9 +40,14 @@ func (s *Server) handleBrowse(w http.ResponseWriter, r *http.Request) {
 	var listing fsbrowse.Listing
 	switch r.URL.Query().Get("kind") {
 	case "exe":
-		listing, err = fsbrowse.ListFiltered(dir, fsbrowse.IsExeFile, "file")
+		listing, err = fsbrowse.ListFiltered(dir, func(name string) string {
+			if fsbrowse.IsExeFile(name) {
+				return "file"
+			}
+			return ""
+		})
 	case "dir":
-		listing, err = fsbrowse.ListFiltered(dir, func(string) bool { return false }, "")
+		listing, err = fsbrowse.ListFiltered(dir, func(string) string { return "" })
 	default:
 		listing, err = fsbrowse.List(dir)
 	}

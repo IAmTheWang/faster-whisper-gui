@@ -1,8 +1,8 @@
 // Package fsbrowse exposes the local filesystem to the frontend: listing
-// drives and directories, filtering to video files, and validating/
-// normalizing paths that arrive from the client (which is the only way this
-// tool can get an absolute path to a video, since browsers won't hand one
-// over — see the project plan for why).
+// drives and directories, filtering to media (video/audio) files, and
+// validating/normalizing paths that arrive from the client (which is the
+// only way this tool can get an absolute path to a media file, since
+// browsers won't hand one over — see the project plan for why).
 package fsbrowse
 
 import (
@@ -22,17 +22,29 @@ type Drive struct {
 	Label string `json:"label"` // e.g. "Local Disk"
 }
 
-// videoExtensions lists file extensions treated as "video" for both
-// directory-listing filtering and job-submission validation.
-var videoExtensions = map[string]bool{
-	".mp4": true, ".mkv": true, ".mov": true, ".avi": true, ".wmv": true,
-	".flv": true, ".webm": true, ".m4v": true, ".ts": true, ".mpg": true,
-	".mpeg": true,
+// mediaExtensions maps each recognized video/audio file extension to its
+// kind ("video" or "audio"), for both directory-listing filtering and
+// job-submission validation.
+var mediaExtensions = map[string]string{
+	// video
+	".mp4": "video", ".mkv": "video", ".mov": "video", ".avi": "video", ".wmv": "video",
+	".flv": "video", ".webm": "video", ".m4v": "video", ".ts": "video", ".mpg": "video",
+	".mpeg": "video",
+	// audio
+	".m4a": "audio", ".mp3": "audio", ".wav": "audio", ".aac": "audio", ".flac": "audio",
+	".ogg": "audio", ".wma": "audio", ".opus": "audio",
 }
 
-// IsVideoFile reports whether path's extension looks like a video container.
-func IsVideoFile(path string) bool {
-	return videoExtensions[strings.ToLower(filepath.Ext(path))]
+// MediaKind reports the kind of media path's extension looks like
+// ("video" or "audio"), or "" if it isn't a recognized media extension.
+func MediaKind(path string) string {
+	return mediaExtensions[strings.ToLower(filepath.Ext(path))]
+}
+
+// IsMediaFile reports whether path's extension looks like a video or audio
+// container.
+func IsMediaFile(path string) bool {
+	return MediaKind(path) != ""
 }
 
 // IsExeFile reports whether path has a .exe extension — used when browsing
@@ -84,11 +96,11 @@ func driveTypeLabel(t uint32) string {
 	}
 }
 
-// Entry is one item (subdirectory or video file) within a browsed directory.
+// Entry is one item (subdirectory or media file) within a browsed directory.
 type Entry struct {
 	Name    string `json:"name"`
 	Path    string `json:"path"`
-	Type    string `json:"type"` // "dir" or "video"
+	Type    string `json:"type"` // "dir", "video", or "audio"
 	Size    int64  `json:"size"`
 	ModTime int64  `json:"modTime"` // unix millis
 }
@@ -100,27 +112,27 @@ type Listing struct {
 	Entries []Entry `json:"entries"`
 }
 
-// List returns dir's subdirectories and video files (everything else is
-// filtered out — this tool only ever needs to find a video), directories
-// first, then alphabetically.
+// List returns dir's subdirectories and media files (everything else is
+// filtered out — this tool only ever needs to find a video or audio file),
+// directories first, then alphabetically.
 //
 // dir must already be an absolute, cleaned, existing directory path —
 // callers (the HTTP handler, via ValidateAbsDir) are responsible for
 // normalizing/validating untrusted input before it reaches here.
 func List(dir string) (Listing, error) {
-	return ListFiltered(dir, IsVideoFile, "video")
+	return ListFiltered(dir, MediaKind)
 }
 
-// ListFiltered returns dir's subdirectories plus files for which match
-// returns true (tagged with fileType), directories first then alphabetical.
-// Pass a match func that always returns false to get a directories-only
-// listing, e.g. for picking the models directory override rather than a
-// file within it.
+// ListFiltered returns dir's subdirectories plus files for which kindOf
+// returns a non-empty tag (used as that entry's Type), directories first
+// then alphabetical. Pass a kindOf func that always returns "" to get a
+// directories-only listing, e.g. for picking the models directory override
+// rather than a file within it.
 //
 // dir must already be an absolute, cleaned, existing directory path —
 // callers (the HTTP handler, via ValidateAbsDir) are responsible for
 // normalizing/validating untrusted input before it reaches here.
-func ListFiltered(dir string, match func(name string) bool, fileType string) (Listing, error) {
+func ListFiltered(dir string, kindOf func(name string) string) (Listing, error) {
 	dirEntries, err := os.ReadDir(dir)
 	if err != nil {
 		return Listing{}, fmt.Errorf("read dir %s: %w", dir, err)
@@ -139,7 +151,8 @@ func ListFiltered(dir string, match func(name string) bool, fileType string) (Li
 			listing.Entries = append(listing.Entries, Entry{Name: name, Path: full, Type: "dir"})
 			continue
 		}
-		if !match(name) {
+		kind := kindOf(name)
+		if kind == "" {
 			continue
 		}
 		fi, err := de.Info()
@@ -149,7 +162,7 @@ func ListFiltered(dir string, match func(name string) bool, fileType string) (Li
 		listing.Entries = append(listing.Entries, Entry{
 			Name:    name,
 			Path:    full,
-			Type:    fileType,
+			Type:    kind,
 			Size:    fi.Size(),
 			ModTime: fi.ModTime().UnixMilli(),
 		})
@@ -184,10 +197,10 @@ func ValidateAbsDir(p string) (string, error) {
 	return clean, nil
 }
 
-// ValidateVideoFile normalizes p and ensures it's an absolute path to an
-// existing regular file with a recognized video extension.
-func ValidateVideoFile(p string) (string, error) {
-	return validateFile(p, IsVideoFile, "does not have a recognized video extension")
+// ValidateMediaFile normalizes p and ensures it's an absolute path to an
+// existing regular file with a recognized video or audio extension.
+func ValidateMediaFile(p string) (string, error) {
+	return validateFile(p, IsMediaFile, "does not have a recognized video or audio extension")
 }
 
 // ValidateExeFile normalizes p and ensures it's an absolute path to an
@@ -198,7 +211,7 @@ func ValidateExeFile(p string) (string, error) {
 }
 
 // validateFile is the shared normalize-then-stat body behind
-// ValidateVideoFile/ValidateExeFile: clean p (handling mixed / and \
+// ValidateMediaFile/ValidateExeFile: clean p (handling mixed / and \
 // separators from a hand-typed field), require it to be absolute, existing,
 // a regular file (not a directory), and satisfy match — otherwise return an
 // error using what to describe the mismatch.

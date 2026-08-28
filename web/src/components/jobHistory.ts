@@ -35,7 +35,7 @@ export function mountJobHistory(root: HTMLElement): JobHistoryHandle {
 
     const activeId = activeTabId.get()
     for (const j of jobs) {
-      const name = basenameOf(j.request.videoPath)
+      const name = basenameOf(j.request.mediaPath)
       const statusText = statusLabels[j.status] ?? j.status
       const percentSuffix = inProgressStatuses.has(j.status) ? ` (${Math.round(j.percent)}%)` : ''
 
@@ -48,7 +48,7 @@ export function mountJobHistory(root: HTMLElement): JobHistoryHandle {
       `
       li.addEventListener('click', () => {
         if (!openTabs.get().some((t) => t.id === j.id)) {
-          openTabs.set([...openTabs.get(), { id: j.id, videoName: name }])
+          openTabs.set([...openTabs.get(), { id: j.id, mediaName: name }])
         }
         activeTabId.set(j.id)
       })

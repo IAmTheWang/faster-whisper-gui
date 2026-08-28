@@ -95,7 +95,7 @@ export function mountProgressPanel(root: HTMLElement, onJobFinished: () => void)
       btn.type = 'button'
       btn.className = tab.id === activeId ? 'progress-tab active' : 'progress-tab'
       const label = document.createElement('span')
-      label.textContent = tab.videoName
+      label.textContent = tab.mediaName
       btn.appendChild(label)
       const close = document.createElement('span')
       close.className = 'progress-tab-close'
@@ -314,7 +314,7 @@ export function mountProgressPanel(root: HTMLElement, onJobFinished: () => void)
         succeeded++
       } else {
         const message = result.reason instanceof Error ? result.reason.message : String(result.reason)
-        failures.push(`${doneTabs[i].videoName}: ${message}`)
+        failures.push(`${doneTabs[i].mediaName}: ${message}`)
       }
     })
     saveStatusEl.textContent =

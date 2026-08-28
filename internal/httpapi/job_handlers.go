@@ -11,7 +11,7 @@ import (
 )
 
 type createJobRequest struct {
-	VideoPath  string `json:"videoPath"`
+	MediaPath  string `json:"mediaPath"`
 	ModelID    string `json:"modelId"`
 	Language   string `json:"language"`
 	OutputMode string `json:"outputMode"`
@@ -24,10 +24,10 @@ type createJobResponse struct {
 	Status string `json:"status"`
 }
 
-// handleCreateJob validates the request end to end — video exists, output
-// directory exists, model is known, target SRT path is currently writable —
-// before enqueueing, so a bad request fails immediately instead of after a
-// possibly multi-minute transcription run.
+// handleCreateJob validates the request end to end — media file exists,
+// output directory exists, model is known, target SRT path is currently
+// writable — before enqueueing, so a bad request fails immediately instead
+// of after a possibly multi-minute transcription run.
 func (s *Server) handleCreateJob(w http.ResponseWriter, r *http.Request) {
 	var req createJobRequest
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
@@ -35,21 +35,21 @@ func (s *Server) handleCreateJob(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	videoPath, err := fsbrowse.ValidateVideoFile(req.VideoPath)
+	mediaPath, err := fsbrowse.ValidateMediaFile(req.MediaPath)
 	if err != nil {
-		writeErrorMsg(w, http.StatusBadRequest, "invalid video path: "+err.Error())
+		writeErrorMsg(w, http.StatusBadRequest, "invalid media path: "+err.Error())
 		return
 	}
 
 	outputMode := job.OutputMode(req.OutputMode)
 	if outputMode == "" {
-		outputMode = job.OutputSameAsVideo
+		outputMode = job.OutputSameAsSource
 	}
 
 	var outputDir string
 	switch outputMode {
-	case job.OutputSameAsVideo:
-		// no extra validation needed — the video's own directory is already known-good
+	case job.OutputSameAsSource:
+		// no extra validation needed — the source file's own directory is already known-good
 	case job.OutputCustom:
 		outputDir, err = fsbrowse.ValidateAbsDir(req.OutputDir)
 		if err != nil {
@@ -79,7 +79,7 @@ func (s *Server) handleCreateJob(w http.ResponseWriter, r *http.Request) {
 	}
 
 	jobReq := job.Request{
-		VideoPath:  videoPath,
+		MediaPath:  mediaPath,
 		ModelID:    req.ModelID,
 		ModelPath:  modelPath,
 		Language:   req.Language,
@@ -139,8 +139,8 @@ type exportJobResponse struct {
 }
 
 // handleExportJob copies an already-finished job's SRT into a user-chosen
-// folder, on top of the automatic write it already got next to the video
-// (or its custom output dir) when the job completed. This is an additive
+// folder, on top of the automatic write it already got next to the source
+// file (or its custom output dir) when the job completed. This is an additive
 // "save a copy" action, not a replacement for that automatic write.
 func (s *Server) handleExportJob(w http.ResponseWriter, r *http.Request) {
 	id := r.PathValue("id")

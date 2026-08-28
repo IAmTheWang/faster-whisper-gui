@@ -6,7 +6,7 @@ export interface Drive {
 export interface Entry {
   name: string
   path: string
-  type: 'dir' | 'video' | 'file'
+  type: 'dir' | 'video' | 'audio' | 'file'
   size: number
   modTime: number
 }
@@ -17,7 +17,7 @@ export interface Listing {
   entries: Entry[]
 }
 
-export type BrowseKind = 'video' | 'exe' | 'dir'
+export type BrowseKind = 'media' | 'exe' | 'dir'
 
 export interface SettingsPaths {
   ffmpegPath: string
@@ -59,7 +59,7 @@ export interface HealthResponse {
   whisperCli: ComponentHealth
 }
 
-export type OutputMode = 'same_as_video' | 'custom'
+export type OutputMode = 'same_as_source' | 'custom'
 
 export type JobStatus =
   | 'queued'
@@ -70,7 +70,7 @@ export type JobStatus =
   | 'canceled'
 
 export interface JobRequestView {
-  videoPath: string
+  mediaPath: string
   modelId: string
   language: string
   outputMode: OutputMode
@@ -91,7 +91,7 @@ export interface Job {
 }
 
 export interface CreateJobRequest {
-  videoPath: string
+  mediaPath: string
   modelId: string
   language: string
   outputMode: OutputMode
@@ -125,7 +125,7 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
 export const api = {
   health: () => request<HealthResponse>('/api/health'),
   drives: () => request<Drive[]>('/api/drives'),
-  browse: (path: string, kind: BrowseKind = 'video') =>
+  browse: (path: string, kind: BrowseKind = 'media') =>
     request<Listing>(`/api/browse?path=${encodeURIComponent(path)}&kind=${kind}`),
   models: () => request<Model[]>('/api/models'),
   languages: () => request<Language[]>('/api/languages'),

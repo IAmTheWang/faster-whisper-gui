@@ -29,15 +29,15 @@ export class Store<T> {
   }
 }
 
-// selectedVideos holds the checked-but-not-yet-submitted videos in the
+// selectedMedia holds the checked-but-not-yet-submitted media files in the
 // directory browser (cleared once a batch of jobs is started).
-export const selectedVideos = new Store<Entry[]>([])
+export const selectedMedia = new Store<Entry[]>([])
 
-// TabInfo is one entry in openTabs — carrying videoName alongside the job id
+// TabInfo is one entry in openTabs — carrying mediaName alongside the job id
 // so progressPanel's tab strip doesn't need an extra fetch just for a label.
 export interface TabInfo {
   id: string
-  videoName: string
+  mediaName: string
 }
 
 // openTabs is every job currently shown as a Progress tab (new jobs from a

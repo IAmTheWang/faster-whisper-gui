@@ -35,11 +35,11 @@ func New(cfg *config.Config) (*http.Server, error) {
 	broker := sseutil.NewBroker()
 	engine := &transcribe.WhisperCppEngine{CliPath: cfg.EffectiveWhisperCliPath}
 	pipeline := job.Pipeline{
-		ExtractAudio: func(ctx context.Context, videoPath, outWavPath string) error {
-			return transcribe.ExtractAudio(ctx, cfg.EffectiveFfmpegPath(), videoPath, outWavPath)
+		ExtractAudio: func(ctx context.Context, mediaPath, outWavPath string) error {
+			return transcribe.ExtractAudio(ctx, cfg.EffectiveFfmpegPath(), mediaPath, outWavPath)
 		},
-		ProbeDuration: func(ctx context.Context, videoPath string) (time.Duration, error) {
-			return transcribe.ProbeDuration(ctx, cfg.EffectiveFfprobePath(), videoPath)
+		ProbeDuration: func(ctx context.Context, mediaPath string) (time.Duration, error) {
+			return transcribe.ProbeDuration(ctx, cfg.EffectiveFfprobePath(), mediaPath)
 		},
 		TmpDir: cfg.TmpDir,
 		Engine: engine,

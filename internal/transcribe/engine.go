@@ -1,6 +1,7 @@
-// Package transcribe drives the video -> audio -> SRT pipeline: extracting
-// audio with ffmpeg, running a transcription engine (whisper.cpp today), and
-// reporting progress as it goes.
+// Package transcribe drives the media -> audio -> SRT pipeline: extracting
+// audio with ffmpeg from a video or audio source file, running a
+// transcription engine (whisper.cpp today), and reporting progress as it
+// goes.
 package transcribe
 
 import (
@@ -12,7 +13,7 @@ import (
 // path is already absolute and cleaned, and TotalDuration has already been
 // probed so the engine can turn segment timestamps into a percentage.
 type Options struct {
-	AudioPath     string        // 16kHz mono PCM WAV extracted from the source video
+	AudioPath     string        // 16kHz mono PCM WAV extracted from the source media file
 	ModelPath     string        // absolute path to a ggml-*.bin model file
 	Language      string        // language code, or "auto"
 	OutputPrefix  string        // absolute path without extension; engine writes OutputPrefix+".srt"

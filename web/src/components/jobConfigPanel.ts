@@ -1,5 +1,5 @@
 import { api, type Language, type Model, type OutputMode } from '../api'
-import { activeTabId, openTabs, selectedVideos, type TabInfo } from '../state'
+import { activeTabId, openTabs, selectedMedia, type TabInfo } from '../state'
 
 export interface JobConfigPanelHandle {
   refreshModels: () => Promise<void>
@@ -10,8 +10,8 @@ export function mountJobConfigPanel(root: HTMLElement, onJobCreated: () => void)
     <div class="panel">
       <h2>Transcription Settings</h2>
       <div class="field">
-        <label>Video Files</label>
-        <div class="selected-video">No videos selected</div>
+        <label>Media Files</label>
+        <div class="selected-media">No files selected</div>
       </div>
       <div class="field">
         <label for="model-select">Model</label>
@@ -24,7 +24,7 @@ export function mountJobConfigPanel(root: HTMLElement, onJobCreated: () => void)
       <div class="field">
         <label>Output Location</label>
         <label class="radio-label">
-          <input type="radio" name="outputMode" value="same_as_video" checked /> Default (same directory as video)
+          <input type="radio" name="outputMode" value="same_as_source" checked /> Default (same directory as the source file)
         </label>
         <label class="radio-label">
           <input type="radio" name="outputMode" value="custom" /> Custom directory
@@ -43,7 +43,7 @@ export function mountJobConfigPanel(root: HTMLElement, onJobCreated: () => void)
     </div>
   `
 
-  const selectedVideoEl = root.querySelector<HTMLDivElement>('.selected-video')!
+  const selectedMediaEl = root.querySelector<HTMLDivElement>('.selected-media')!
   const modelSelect = root.querySelector<HTMLSelectElement>('.model-select')!
   const languageSelect = root.querySelector<HTMLSelectElement>('.language-select')!
   const outputModeRadios = root.querySelectorAll<HTMLInputElement>('input[name="outputMode"]')
@@ -54,7 +54,7 @@ export function mountJobConfigPanel(root: HTMLElement, onJobCreated: () => void)
 
   function getOutputMode(): OutputMode {
     const checked = root.querySelector<HTMLInputElement>('input[name="outputMode"]:checked')
-    return (checked?.value as OutputMode) ?? 'same_as_video'
+    return (checked?.value as OutputMode) ?? 'same_as_source'
   }
 
   outputModeRadios.forEach((radio) => {
@@ -63,13 +63,13 @@ export function mountJobConfigPanel(root: HTMLElement, onJobCreated: () => void)
     })
   })
 
-  selectedVideos.subscribe((videos) => {
-    if (videos.length === 0) {
-      selectedVideoEl.textContent = 'No videos selected'
-    } else if (videos.length > 5) {
-      selectedVideoEl.textContent = `${videos.length} videos selected`
+  selectedMedia.subscribe((files) => {
+    if (files.length === 0) {
+      selectedMediaEl.textContent = 'No files selected'
+    } else if (files.length > 5) {
+      selectedMediaEl.textContent = `${files.length} files selected`
     } else {
-      selectedVideoEl.textContent = videos.map((v) => v.name).join(', ')
+      selectedMediaEl.textContent = files.map((v) => v.name).join(', ')
     }
   })
 
@@ -90,9 +90,9 @@ export function mountJobConfigPanel(root: HTMLElement, onJobCreated: () => void)
   startBtn.addEventListener('click', async () => {
     formError.textContent = ''
 
-    const videos = selectedVideos.get()
-    if (videos.length === 0) {
-      formError.textContent = 'Select at least one video file on the left first'
+    const files = selectedMedia.get()
+    if (files.length === 0) {
+      formError.textContent = 'Select at least one file on the left first'
       return
     }
     if (!modelSelect.value) {
@@ -109,9 +109,9 @@ export function mountJobConfigPanel(root: HTMLElement, onJobCreated: () => void)
     startBtn.disabled = true
     try {
       const results = await Promise.allSettled(
-        videos.map((video) =>
+        files.map((file) =>
           api.createJob({
-            videoPath: video.path,
+            mediaPath: file.path,
             modelId: modelSelect.value,
             language,
             outputMode,
@@ -125,10 +125,10 @@ export function mountJobConfigPanel(root: HTMLElement, onJobCreated: () => void)
       const errors: string[] = []
       results.forEach((result, i) => {
         if (result.status === 'fulfilled') {
-          newTabs.push({ id: result.value.jobId, videoName: videos[i].name })
+          newTabs.push({ id: result.value.jobId, mediaName: files[i].name })
         } else {
           const message = result.reason instanceof Error ? result.reason.message : String(result.reason)
-          errors.push(`${videos[i].name}: ${message}`)
+          errors.push(`${files[i].name}: ${message}`)
         }
       })
 
@@ -138,7 +138,7 @@ export function mountJobConfigPanel(root: HTMLElement, onJobCreated: () => void)
         onJobCreated()
       }
       formError.textContent = errors.join('; ')
-      selectedVideos.set([])
+      selectedMedia.set([])
     } finally {
       startBtn.disabled = false
     }

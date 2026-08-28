@@ -16,11 +16,11 @@ import (
 // extraction and duration probing are injected as funcs (rather than
 // exposing FfmpegPath/FfprobePath directly) so tests can exercise the
 // queue's sequencing/cancellation logic with fakes instead of real
-// subprocesses — see queue_test.go. main.go wires these to
+// subprocesses — see queue_test.go. internal/appserver wires these to
 // transcribe.ExtractAudio/transcribe.ProbeDuration.
 type Pipeline struct {
-	ExtractAudio  func(ctx context.Context, videoPath, outWavPath string) error
-	ProbeDuration func(ctx context.Context, videoPath string) (time.Duration, error)
+	ExtractAudio  func(ctx context.Context, mediaPath, outWavPath string) error
+	ProbeDuration func(ctx context.Context, mediaPath string) (time.Duration, error)
 	TmpDir        string
 	Engine        transcribe.Engine
 }
@@ -53,7 +53,7 @@ func NewQueue(store *Store, pipeline Pipeline, events EventPublisher) *Queue {
 }
 
 // Submit creates a new job in Queued state and enqueues it for processing.
-// The caller is expected to have already validated req (video exists,
+// The caller is expected to have already validated req (media file exists,
 // output path is writable, model exists) — see httpapi's job handler.
 func (q *Queue) Submit(req Request) (*Job, error) {
 	id, err := newJobID()
@@ -88,12 +88,12 @@ func (q *Queue) process(j *Job) {
 	defer os.Remove(tmpWav)
 
 	q.setStatus(j.ID, StatusExtractingAudio, 0, "Extracting audio")
-	if err := q.pipeline.ExtractAudio(ctx, j.Request.VideoPath, tmpWav); err != nil {
+	if err := q.pipeline.ExtractAudio(ctx, j.Request.MediaPath, tmpWav); err != nil {
 		q.finishWithError(j.ID, ctx, err)
 		return
 	}
 
-	duration, err := q.pipeline.ProbeDuration(ctx, j.Request.VideoPath)
+	duration, err := q.pipeline.ProbeDuration(ctx, j.Request.MediaPath)
 	if err != nil {
 		q.finishWithError(j.ID, ctx, err)
 		return

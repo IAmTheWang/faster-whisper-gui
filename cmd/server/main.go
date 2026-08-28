@@ -1,5 +1,5 @@
 // Command server is the faster-whisper-gui backend: a local-only HTTP
-// server that serves the embedded frontend and drives the video -> SRT
+// server that serves the embedded frontend and drives the media -> SRT
 // transcription pipeline (see the project plan at
 // C:\Users\carlos\.claude\plans\go-ts-faster-whisper-glowing-possum.md for
 // the full design). This is the production entrypoint — for iterating on

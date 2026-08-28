@@ -1,21 +1,21 @@
 import { api, type Entry } from '../api'
 import { escapeHtml } from '../dom'
-import { selectedVideos } from '../state'
+import { selectedMedia } from '../state'
 
 function toggleSelection(entry: Entry): void {
-  const current = selectedVideos.get()
+  const current = selectedMedia.get()
   const idx = current.findIndex((e) => e.path === entry.path)
   if (idx === -1) {
-    selectedVideos.set([...current, entry])
+    selectedMedia.set([...current, entry])
   } else {
-    selectedVideos.set([...current.slice(0, idx), ...current.slice(idx + 1)])
+    selectedMedia.set([...current.slice(0, idx), ...current.slice(idx + 1)])
   }
 }
 
 export function mountDirectoryBrowser(root: HTMLElement): void {
   root.innerHTML = `
     <div class="panel">
-      <h2>Select Video</h2>
+      <h2>Select Media</h2>
       <div class="browser-toolbar">
         <select class="drive-select"></select>
       </div>
@@ -34,7 +34,7 @@ export function mountDirectoryBrowser(root: HTMLElement): void {
   const breadcrumb = root.querySelector<HTMLDivElement>('.breadcrumb')!
   const entryList = root.querySelector<HTMLUListElement>('.entry-list')!
 
-  clearSelectionBtn.addEventListener('click', () => selectedVideos.set([]))
+  clearSelectionBtn.addEventListener('click', () => selectedMedia.set([]))
 
   async function loadDrives(): Promise<void> {
     const drives = await api.drives()
@@ -83,16 +83,18 @@ export function mountDirectoryBrowser(root: HTMLElement): void {
       return
     }
 
-    const selectedPaths = new Set(selectedVideos.get().map((e) => e.path))
+    const selectedPaths = new Set(selectedMedia.get().map((e) => e.path))
     for (const entry of entries) {
       const li = document.createElement('li')
       li.className = `entry entry-${entry.type}`
       li.dataset.path = entry.path
 
-      if (entry.type === 'video') {
+      const isMedia = entry.type === 'video' || entry.type === 'audio'
+      if (isMedia) {
+        li.classList.add('entry-media')
         const checkbox = document.createElement('input')
         checkbox.type = 'checkbox'
-        checkbox.className = 'video-checkbox'
+        checkbox.className = 'media-checkbox'
         checkbox.checked = selectedPaths.has(entry.path)
         checkbox.addEventListener('click', (e) => e.stopPropagation())
         checkbox.addEventListener('change', () => toggleSelection(entry))
@@ -101,7 +103,7 @@ export function mountDirectoryBrowser(root: HTMLElement): void {
       }
 
       const label = document.createElement('span')
-      const icon = entry.type === 'dir' ? '📁' : '🎬'
+      const icon = entry.type === 'dir' ? '📁' : entry.type === 'audio' ? '🎵' : '🎬'
       label.textContent = `${icon} ${entry.name}`
       li.appendChild(label)
 
@@ -118,16 +120,16 @@ export function mountDirectoryBrowser(root: HTMLElement): void {
 
   driveSelect.addEventListener('change', () => navigate(driveSelect.value))
 
-  selectedVideos.subscribe((videos) => {
-    const selectedPaths = new Set(videos.map((v) => v.path))
-    entryList.querySelectorAll<HTMLLIElement>('.entry-video').forEach((el) => {
+  selectedMedia.subscribe((media) => {
+    const selectedPaths = new Set(media.map((v) => v.path))
+    entryList.querySelectorAll<HTMLLIElement>('.entry-media').forEach((el) => {
       const isSelected = !!el.dataset.path && selectedPaths.has(el.dataset.path)
       el.classList.toggle('selected', isSelected)
-      const checkbox = el.querySelector<HTMLInputElement>('.video-checkbox')
+      const checkbox = el.querySelector<HTMLInputElement>('.media-checkbox')
       if (checkbox) checkbox.checked = isSelected
     })
-    selectionCount.textContent = videos.length > 0 ? `${videos.length} selected` : ''
-    clearSelectionBtn.hidden = videos.length === 0
+    selectionCount.textContent = media.length > 0 ? `${media.length} selected` : ''
+    clearSelectionBtn.hidden = media.length === 0
   })
 
   loadDrives()

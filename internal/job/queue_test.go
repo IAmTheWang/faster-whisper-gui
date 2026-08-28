@@ -78,10 +78,10 @@ func (p *fakePublisher) eventTypesFor(jobID string) []string {
 	return out
 }
 
-func noopFfmpeg(ctx context.Context, videoPath, outWavPath string) error { return nil }
+func noopFfmpeg(ctx context.Context, mediaPath, outWavPath string) error { return nil }
 
 func fixedDuration(d time.Duration) func(context.Context, string) (time.Duration, error) {
-	return func(ctx context.Context, videoPath string) (time.Duration, error) { return d, nil }
+	return func(ctx context.Context, mediaPath string) (time.Duration, error) { return d, nil }
 }
 
 func waitForStatus(t *testing.T, store *Store, id string, want Status, timeout time.Duration) Job {
@@ -111,11 +111,11 @@ func TestQueueRunsJobsSequentially(t *testing.T) {
 	}
 	q := NewQueue(store, pipeline, pub)
 
-	j1, err := q.Submit(Request{VideoPath: `E:\v\1.mp4`, OutputMode: OutputSameAsVideo})
+	j1, err := q.Submit(Request{MediaPath: `E:\v\1.mp4`, OutputMode: OutputSameAsSource})
 	if err != nil {
 		t.Fatalf("Submit(1): %v", err)
 	}
-	j2, err := q.Submit(Request{VideoPath: `E:\v\2.mp4`, OutputMode: OutputSameAsVideo})
+	j2, err := q.Submit(Request{MediaPath: `E:\v\2.mp4`, OutputMode: OutputSameAsSource})
 	if err != nil {
 		t.Fatalf("Submit(2): %v", err)
 	}
@@ -145,7 +145,7 @@ func TestQueueCancel(t *testing.T) {
 	}
 	q := NewQueue(store, pipeline, pub)
 
-	j, err := q.Submit(Request{VideoPath: `E:\v\1.mp4`, OutputMode: OutputSameAsVideo})
+	j, err := q.Submit(Request{MediaPath: `E:\v\1.mp4`, OutputMode: OutputSameAsSource})
 	if err != nil {
 		t.Fatalf("Submit: %v", err)
 	}
@@ -181,7 +181,7 @@ func TestQueueEngineFailure(t *testing.T) {
 	}
 	q := NewQueue(store, pipeline, pub)
 
-	j, err := q.Submit(Request{VideoPath: `E:\v\1.mp4`, OutputMode: OutputSameAsVideo})
+	j, err := q.Submit(Request{MediaPath: `E:\v\1.mp4`, OutputMode: OutputSameAsSource})
 	if err != nil {
 		t.Fatalf("Submit: %v", err)
 	}
