@@ -4,6 +4,7 @@ import (
 	"os"
 	"path/filepath"
 	"testing"
+	"time"
 )
 
 func TestIsMediaFile(t *testing.T) {
@@ -176,6 +177,37 @@ func TestList(t *testing.T) {
 	}
 	if listing.Entries[0].Type != "dir" || listing.Entries[2].Type != "video" || listing.Entries[4].Type != "audio" {
 		t.Errorf("unexpected entry types: %+v", listing.Entries)
+	}
+}
+
+func TestListPopulatesCreatedTime(t *testing.T) {
+	dir := t.TempDir()
+	before := time.Now().Add(-2 * time.Second)
+
+	mustWrite(t, filepath.Join(dir, "clip.mp4"), "video")
+	if err := os.Mkdir(filepath.Join(dir, "subdir"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+
+	after := time.Now().Add(2 * time.Second)
+
+	listing, err := List(dir)
+	if err != nil {
+		t.Fatalf("List: %v", err)
+	}
+
+	for _, e := range listing.Entries {
+		if e.CreatedTime == 0 {
+			t.Errorf("Entries[%q].CreatedTime = 0, want non-zero", e.Name)
+			continue
+		}
+		created := time.UnixMilli(e.CreatedTime)
+		if created.Before(before) || created.After(after) {
+			t.Errorf("Entries[%q].CreatedTime = %v, want between %v and %v", e.Name, created, before, after)
+		}
+		if e.Name == "subdir" && e.ModTime == 0 {
+			t.Errorf("Entries[%q].ModTime = 0, want non-zero for a directory entry", e.Name)
+		}
 	}
 }
 

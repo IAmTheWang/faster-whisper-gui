@@ -12,6 +12,8 @@ import (
 	"path/filepath"
 	"sort"
 	"strings"
+	"syscall"
+	"time"
 
 	"golang.org/x/sys/windows"
 )
@@ -98,11 +100,25 @@ func driveTypeLabel(t uint32) string {
 
 // Entry is one item (subdirectory or media file) within a browsed directory.
 type Entry struct {
-	Name    string `json:"name"`
-	Path    string `json:"path"`
-	Type    string `json:"type"` // "dir", "video", or "audio"
-	Size    int64  `json:"size"`
-	ModTime int64  `json:"modTime"` // unix millis
+	Name        string `json:"name"`
+	Path        string `json:"path"`
+	Type        string `json:"type"` // "dir", "video", or "audio"
+	Size        int64  `json:"size"`
+	ModTime     int64  `json:"modTime"`     // unix millis
+	CreatedTime int64  `json:"createdTime"` // unix millis
+}
+
+// creationTime extracts a file or directory's Windows creation timestamp
+// (unix millis) from fi, or 0 if unavailable (including a zeroed FILETIME,
+// which some filesystems report when creation time isn't tracked — treating
+// that as 0 rather than converting it avoids surfacing the ~1601 date that
+// Nanoseconds() would otherwise produce from the Unix epoch offset).
+func creationTime(fi os.FileInfo) int64 {
+	winFI, ok := fi.Sys().(*syscall.Win32FileAttributeData)
+	if !ok || (winFI.CreationTime.HighDateTime == 0 && winFI.CreationTime.LowDateTime == 0) {
+		return 0
+	}
+	return time.Unix(0, winFI.CreationTime.Nanoseconds()).UnixMilli()
 }
 
 // Listing is the result of browsing one directory.
@@ -148,7 +164,12 @@ func ListFiltered(dir string, kindOf func(name string) string) (Listing, error) 
 		full := filepath.Join(dir, name)
 
 		if de.IsDir() {
-			listing.Entries = append(listing.Entries, Entry{Name: name, Path: full, Type: "dir"})
+			entry := Entry{Name: name, Path: full, Type: "dir"}
+			if fi, err := de.Info(); err == nil {
+				entry.ModTime = fi.ModTime().UnixMilli()
+				entry.CreatedTime = creationTime(fi)
+			}
+			listing.Entries = append(listing.Entries, entry)
 			continue
 		}
 		kind := kindOf(name)
@@ -160,11 +181,12 @@ func ListFiltered(dir string, kindOf func(name string) string) (Listing, error) 
 			continue
 		}
 		listing.Entries = append(listing.Entries, Entry{
-			Name:    name,
-			Path:    full,
-			Type:    kind,
-			Size:    fi.Size(),
-			ModTime: fi.ModTime().UnixMilli(),
+			Name:        name,
+			Path:        full,
+			Type:        kind,
+			Size:        fi.Size(),
+			ModTime:     fi.ModTime().UnixMilli(),
+			CreatedTime: creationTime(fi),
 		})
 	}
 

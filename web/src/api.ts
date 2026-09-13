@@ -9,6 +9,7 @@ export interface Entry {
   type: 'dir' | 'video' | 'audio' | 'file'
   size: number
   modTime: number
+  createdTime: number
 }
 
 export interface Listing {
