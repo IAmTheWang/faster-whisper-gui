@@ -17,6 +17,7 @@ type createJobRequest struct {
 	OutputMode string `json:"outputMode"`
 	OutputDir  string `json:"outputDir,omitempty"`
 	MaxLen     int    `json:"maxLen,omitempty"`
+	MaxContext int    `json:"maxContext,omitempty"`
 }
 
 type createJobResponse struct {
@@ -86,6 +87,7 @@ func (s *Server) handleCreateJob(w http.ResponseWriter, r *http.Request) {
 		OutputMode: outputMode,
 		OutputDir:  outputDir,
 		MaxLen:     req.MaxLen,
+		MaxContext: req.MaxContext,
 	}
 
 	srtPath := job.OutputPrefix(jobReq) + ".srt"

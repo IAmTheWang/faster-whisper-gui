@@ -26,6 +26,7 @@ func TestBuildWhisperArgs(t *testing.T) {
 				"-l", "ja",
 				"-of", `E:\videos\lecture1`,
 				"-osrt",
+				"-mc", "0",
 			},
 		},
 		{
@@ -42,6 +43,7 @@ func TestBuildWhisperArgs(t *testing.T) {
 				"-l", "auto",
 				"-of", `E:\videos\lecture1`,
 				"-osrt",
+				"-mc", "0",
 			},
 		},
 		{
@@ -59,7 +61,26 @@ func TestBuildWhisperArgs(t *testing.T) {
 				"-l", "auto",
 				"-of", `E:\videos\lecture1`,
 				"-osrt",
+				"-mc", "0",
 				"-ml", "16",
+			},
+		},
+		{
+			name: "maxContext override changes -mc value",
+			opts: Options{
+				ModelPath:    `E:\models\ggml-small.bin`,
+				AudioPath:    `E:\tmp\job1.wav`,
+				Language:     "auto",
+				OutputPrefix: `E:\videos\lecture1`,
+				MaxContext:   -1,
+			},
+			want: []string{
+				"-m", `E:\models\ggml-small.bin`,
+				"-f", `E:\tmp\job1.wav`,
+				"-l", "auto",
+				"-of", `E:\videos\lecture1`,
+				"-osrt",
+				"-mc", "-1",
 			},
 		},
 	}

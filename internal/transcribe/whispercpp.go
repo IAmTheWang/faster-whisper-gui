@@ -27,6 +27,7 @@ func BuildWhisperArgs(opts Options) []string {
 		"-l", lang,
 		"-of", opts.OutputPrefix,
 		"-osrt",
+		"-mc", strconv.Itoa(opts.MaxContext),
 	}
 	if opts.MaxLen > 0 {
 		args = append(args, "-ml", strconv.Itoa(opts.MaxLen))

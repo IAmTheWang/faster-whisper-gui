@@ -77,6 +77,7 @@ export interface JobRequestView {
   outputMode: OutputMode
   outputDir?: string
   maxLen?: number
+  maxContext?: number
 }
 
 export interface Job {
@@ -98,6 +99,7 @@ export interface CreateJobRequest {
   outputMode: OutputMode
   outputDir?: string
   maxLen?: number
+  maxContext?: number
 }
 
 export interface CreateJobResponse {

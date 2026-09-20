@@ -128,8 +128,8 @@ body {
 }
 
 .listing-header .breadcrumb {
-  flex: 1;
-  min-width: 0;
+  flex: 1 1 auto;
+  min-width: 60px;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
@@ -152,16 +152,20 @@ body {
   word-break: break-all;
 }
 
-.sort-controls {
+.header-actions {
   flex-shrink: 0;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.sort-controls {
   display: flex;
   gap: 4px;
   white-space: nowrap;
 }
 
 .refresh-btn {
-  flex-shrink: 0;
-  margin-left: 8px;
   font-size: 14px;
 }
 
@@ -170,10 +174,12 @@ body {
   cursor: not-allowed;
 }
 
-.refresh-btn.is-refreshing {
-  display: inline-block;
-  transform-origin: center;
-  animation: spin 0.6s linear infinite;
+@media (prefers-reduced-motion: no-preference) {
+  .refresh-btn.is-refreshing {
+    display: inline-block;
+    transform-origin: center;
+    animation: spin 0.6s linear infinite;
+  }
 }
 
 @keyframes spin {

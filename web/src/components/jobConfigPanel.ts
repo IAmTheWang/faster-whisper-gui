@@ -37,6 +37,10 @@ export function mountJobConfigPanel(root: HTMLElement, onJobCreated: () => void)
           <label for="max-len">Max characters per subtitle line (leave blank for default)</label>
           <input type="number" id="max-len" class="max-len" min="1" />
         </div>
+        <div class="field">
+          <label for="max-context">Context carried between segments (0 = disabled, recommended; -1 = whisper default/unlimited)</label>
+          <input type="number" id="max-context" class="max-context" value="0" />
+        </div>
       </details>
       <button type="button" class="btn-primary start-btn">Start Transcription</button>
       <div class="form-error"></div>
@@ -49,6 +53,7 @@ export function mountJobConfigPanel(root: HTMLElement, onJobCreated: () => void)
   const outputModeRadios = root.querySelectorAll<HTMLInputElement>('input[name="outputMode"]')
   const outputDirInput = root.querySelector<HTMLInputElement>('.output-dir')!
   const maxLenInput = root.querySelector<HTMLInputElement>('.max-len')!
+  const maxContextInput = root.querySelector<HTMLInputElement>('.max-context')!
   const startBtn = root.querySelector<HTMLButtonElement>('.start-btn')!
   const formError = root.querySelector<HTMLDivElement>('.form-error')!
 
@@ -105,6 +110,8 @@ export function mountJobConfigPanel(root: HTMLElement, onJobCreated: () => void)
     const language = languageSelect.value || 'auto'
     const outputDir = outputMode === 'custom' ? outputDirInput.value.trim() : undefined
     const maxLen = maxLenValue ? Number(maxLenValue) : undefined
+    const maxContextValue = maxContextInput.value.trim()
+    const maxContext = maxContextValue === '' ? 0 : Number(maxContextValue)
 
     startBtn.disabled = true
     try {
@@ -117,6 +124,7 @@ export function mountJobConfigPanel(root: HTMLElement, onJobCreated: () => void)
             outputMode,
             outputDir,
             maxLen,
+            maxContext,
           }),
         ),
       )

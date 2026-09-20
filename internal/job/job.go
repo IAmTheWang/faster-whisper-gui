@@ -44,8 +44,9 @@ type Request struct {
 	ModelPath  string     `json:"-"` // local filesystem detail, not part of the public API shape
 	Language   string     `json:"language"`
 	OutputMode OutputMode `json:"outputMode"`
-	OutputDir  string     `json:"outputDir,omitempty"` // only meaningful when OutputMode == OutputCustom
-	MaxLen     int        `json:"maxLen,omitempty"`    // 0 = engine default
+	OutputDir  string     `json:"outputDir,omitempty"`  // only meaningful when OutputMode == OutputCustom
+	MaxLen     int        `json:"maxLen,omitempty"`     // 0 = engine default
+	MaxContext int        `json:"maxContext,omitempty"` // -mc passed to whisper-cli; 0 disables context carryover (default)
 }
 
 // Job is a Request plus its runtime state.

@@ -106,6 +106,7 @@ func (q *Queue) process(j *Job) {
 		Language:      j.Request.Language,
 		OutputPrefix:  OutputPrefix(j.Request),
 		MaxLen:        j.Request.MaxLen,
+		MaxContext:    j.Request.MaxContext,
 		TotalDuration: duration,
 	}
 	err = q.pipeline.Engine.Transcribe(ctx, opts, func(p transcribe.Progress) {

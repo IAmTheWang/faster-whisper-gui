@@ -18,6 +18,7 @@ type Options struct {
 	Language      string        // language code, or "auto"
 	OutputPrefix  string        // absolute path without extension; engine writes OutputPrefix+".srt"
 	MaxLen        int           // max characters per subtitle cue; 0 = engine default
+	MaxContext    int           // -mc passed to whisper-cli; 0 disables context carryover between segments (default, avoids hallucination propagating through the rest of a file); whisper-cli's own native default is -1 (unlimited)
 	TotalDuration time.Duration // source audio duration, for progress percentage
 }
 

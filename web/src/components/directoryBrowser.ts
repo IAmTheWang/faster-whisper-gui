@@ -2,15 +2,16 @@ import { api, type Entry } from '../api'
 import { escapeHtml } from '../dom'
 import { selectedMedia } from '../state'
 
-type SortKey = 'name' | 'type' | 'modTime' | 'createdTime'
+type SortKey = 'name' | 'type' | 'modTime' | 'createdTime' | 'size'
 type SortDir = 'asc' | 'desc'
 
-const SORT_KEYS: SortKey[] = ['name', 'type', 'modTime', 'createdTime']
+const SORT_KEYS: SortKey[] = ['name', 'type', 'modTime', 'createdTime', 'size']
 const SORT_LABELS: Record<SortKey, string> = {
   name: 'Name',
   type: 'Type',
   modTime: 'Modified',
   createdTime: 'Created',
+  size: 'Size',
 }
 const SORT_STORAGE_KEY = 'directoryBrowser.sort'
 
@@ -68,13 +69,15 @@ export function mountDirectoryBrowser(root: HTMLElement): void {
       </div>
       <div class="listing-header">
         <div class="breadcrumb"></div>
-        <div class="sort-controls">
-          ${SORT_KEYS.map(
-            (key) =>
-              `<button type="button" class="sort-option" data-key="${key}">${SORT_LABELS[key]}<span class="sort-arrow" aria-hidden="true"></span></button>`,
-          ).join('')}
+        <div class="header-actions">
+          <div class="sort-controls">
+            ${SORT_KEYS.map(
+              (key) =>
+                `<button type="button" class="sort-option" data-key="${key}">${SORT_LABELS[key]}<span class="sort-arrow" aria-hidden="true"></span></button>`,
+            ).join('')}
+          </div>
+          <button type="button" class="btn-link refresh-btn" aria-label="Refresh" title="Refresh" disabled>⟳</button>
         </div>
-        <button type="button" class="btn-link refresh-btn" aria-label="Refresh" title="Refresh">⟳</button>
       </div>
       <ul class="entry-list"></ul>
     </div>
@@ -108,6 +111,9 @@ export function mountDirectoryBrowser(root: HTMLElement): void {
         break
       case 'createdTime':
         cmp = a.createdTime - b.createdTime || compareByName(a, b)
+        break
+      case 'size':
+        cmp = a.size - b.size || compareByName(a, b)
         break
       default:
         cmp = compareByName(a, b)
@@ -154,6 +160,7 @@ export function mountDirectoryBrowser(root: HTMLElement): void {
     try {
       const listing = await api.browse(path)
       currentPath = listing.path
+      refreshBtn.disabled = false
       renderBreadcrumb(listing.path, listing.parent)
       renderEntries(listing.entries)
     } catch (err) {
@@ -244,6 +251,7 @@ export function mountDirectoryBrowser(root: HTMLElement): void {
 
   refreshBtn.addEventListener('click', async () => {
     if (!currentPath) return
+    const hadFocus = document.activeElement === refreshBtn
     refreshBtn.disabled = true
     refreshBtn.classList.add('is-refreshing')
     try {
@@ -251,6 +259,7 @@ export function mountDirectoryBrowser(root: HTMLElement): void {
     } finally {
       refreshBtn.disabled = false
       refreshBtn.classList.remove('is-refreshing')
+      if (hadFocus) refreshBtn.focus()
     }
   })
 
