@@ -1,5 +1,5 @@
 import { api, type Entry } from '../api'
-import { escapeHtml } from '../dom'
+import { dirnameOf, escapeHtml, stripSurroundingQuotes } from '../dom'
 import { selectedMedia } from '../state'
 
 type SortKey = 'name' | 'type' | 'modTime' | 'createdTime' | 'size'
@@ -61,7 +61,8 @@ export function mountDirectoryBrowser(root: HTMLElement): void {
     <div class="panel">
       <h2>Select Media</h2>
       <div class="browser-toolbar">
-        <select class="drive-select"></select>
+        <input type="text" class="drive-select"
+               placeholder="Drive letter or paste a full path" autocomplete="off" spellcheck="false" />
       </div>
       <div class="selection-bar">
         <span class="selection-count"></span>
@@ -83,7 +84,7 @@ export function mountDirectoryBrowser(root: HTMLElement): void {
     </div>
   `
 
-  const driveSelect = root.querySelector<HTMLSelectElement>('.drive-select')!
+  const driveInput = root.querySelector<HTMLInputElement>('.drive-select')!
   const sortControls = root.querySelector<HTMLDivElement>('.sort-controls')!
   const refreshBtn = root.querySelector<HTMLButtonElement>('.refresh-btn')!
   const selectionCount = root.querySelector<HTMLSpanElement>('.selection-count')!
@@ -144,27 +145,39 @@ export function mountDirectoryBrowser(root: HTMLElement): void {
 
   async function loadDrives(): Promise<void> {
     const drives = await api.drives()
-    driveSelect.innerHTML = drives
-      .map((d) => `<option value="${escapeHtml(d.name)}">${escapeHtml(d.name)} ${escapeHtml(d.label)}</option>`)
-      .join('')
     if (drives.length === 0) return
 
     const settings = await api.settings().catch(() => null)
     const defaultDir = settings?.defaultVideoDir
     const startDrive = defaultDir ? drives.find((d) => defaultDir.toUpperCase().startsWith(d.name.toUpperCase())) : undefined
-    driveSelect.value = (startDrive ?? drives[0]).name
+    driveInput.value = defaultDir || (startDrive ?? drives[0]).name
     await navigate(defaultDir || drives[0].name)
   }
 
-  async function navigate(path: string): Promise<void> {
+  async function navigate(path: string): Promise<Error | null> {
     try {
       const listing = await api.browse(path)
       currentPath = listing.path
+      driveInput.value = listing.path
       refreshBtn.disabled = false
       renderBreadcrumb(listing.path, listing.parent)
       renderEntries(listing.entries)
+      return null
     } catch (err) {
-      entryList.innerHTML = `<li class="entry-error">${escapeHtml(err instanceof Error ? err.message : String(err))}</li>`
+      const error = err instanceof Error ? err : new Error(String(err))
+      entryList.innerHTML = `<li class="entry-error">${escapeHtml(error.message)}</li>`
+      driveInput.value = currentPath
+      return error
+    }
+  }
+
+  async function navigateToPastedPath(raw: string): Promise<void> {
+    const cleaned = stripSurroundingQuotes(raw)
+    if (!cleaned || cleaned === currentPath) return
+    const err = await navigate(cleaned)
+    if (err && /is not a directory/i.test(err.message || '')) {
+      const parent = dirnameOf(cleaned)
+      if (parent) await navigate(parent)
     }
   }
 
@@ -232,7 +245,15 @@ export function mountDirectoryBrowser(root: HTMLElement): void {
     }
   }
 
-  driveSelect.addEventListener('change', () => navigate(driveSelect.value))
+  driveInput.addEventListener('paste', () => setTimeout(() => navigateToPastedPath(driveInput.value), 0))
+  driveInput.addEventListener('keydown', (e) => {
+    if (e.key === 'Enter') {
+      e.preventDefault()
+      navigateToPastedPath(driveInput.value)
+    }
+  })
+  driveInput.addEventListener('change', () => navigateToPastedPath(driveInput.value))
+  driveInput.addEventListener('focus', () => driveInput.select())
 
   sortControls.addEventListener('click', (e) => {
     const btn = (e.target as HTMLElement).closest<HTMLButtonElement>('.sort-option')

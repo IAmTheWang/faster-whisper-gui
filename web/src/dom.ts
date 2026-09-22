@@ -15,3 +15,21 @@ export function escapeHtml(value: string): string {
 export function basenameOf(path: string): string {
   return path.split(/[\\/]/).pop() ?? path
 }
+
+// stripSurroundingQuotes undoes what Explorer's "Copy as path" adds. A bare
+// quote can't legally appear in a Windows path, so stripping either end
+// unconditionally (not just matched pairs) is safe.
+export function stripSurroundingQuotes(raw: string): string {
+  return raw.trim().replace(/^["']|["']$/g, '')
+}
+
+// dirnameOf mirrors basenameOf: the parent directory of a Windows or
+// forward-slash path. Special-cases a bare drive letter (e.g. stripping
+// "video.mp4" from "C:\video.mp4" naively yields "C:", which Windows/Go
+// treat as "current directory on C:", not the root "C:\").
+export function dirnameOf(path: string): string | null {
+  const idx = Math.max(path.lastIndexOf('\\'), path.lastIndexOf('/'))
+  if (idx <= 0) return null
+  const dir = path.slice(0, idx)
+  return /^[a-zA-Z]:$/.test(dir) ? `${dir}\\` : dir
+}
