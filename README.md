@@ -49,7 +49,7 @@ Listens on `http://127.0.0.1:8080` by default (loopback only, never exposed to t
 
 ## Usage
 
-1. **Select Media** — browse to one or more video or audio files and check the box next to each one you want transcribed. Selections persist as you navigate between folders.
+1. **Select Media** — browse to one or more video or audio files and check the box next to each one you want transcribed. Selections persist as you navigate between folders. The path field above the file list also accepts typed or pasted paths (e.g. Explorer's "Copy as path") — paste a folder to jump straight there, or a file to jump to its containing folder.
 2. **Transcription Settings** — pick a model and language once; this configuration is shared by every checked file in the batch (there's no per-file config). Choose the default "same directory as the source file" output, or a custom output directory. Click **Start Transcription** to queue a job for each checked file.
 3. **Progress** — each running or finished job gets its own tab, so you can watch several files' transcriptions at a glance. Jobs still process one at a time under the hood (see [Architecture](#architecture-at-a-glance)); background tabs keep updating live even while you're looking at a different one. Once a job is done, use **Save** to copy that job's `.srt` to another folder, or **Save All Completed** to copy every finished job's `.srt` in the batch to one folder in one click — this is purely an extra copy, the original `.srt` next to the source file (or in your chosen output directory) is written the moment the job finishes either way.
 4. **Job History** — every job ever run this session, click one to reopen (or jump back to) its Progress tab.
@@ -89,7 +89,7 @@ go test ./...
 - **Progress reporting**: SSE (`GET /api/jobs/{id}/events`), primarily derived from whisper-cli's own per-segment timestamps, supplemented by its built-in percentage output.
 - **Save is additive**: the `.srt` is always written to its real destination the moment a job finishes, exactly as before; "Save"/"Save All Completed" (`POST /api/jobs/{id}/export`) just copies an already-finished job's `.srt` to a second location on demand.
 - **Process robustness**: ffmpeg/whisper-cli subprocesses are managed through a Windows Job Object, so canceling a job or the server itself crashing never leaves an orphaned process behind.
-- See `CLAUDE.md` (and the `CLAUDE.md` in each package/directory) for the full design rationale behind each of these.
+- See `CLAUDE.md` for the full design rationale behind each of these.
 
 ## Known limitations
 

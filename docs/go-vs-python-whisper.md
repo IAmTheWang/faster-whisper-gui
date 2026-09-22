@@ -23,4 +23,4 @@
 
 ## 为什么这个项目选子进程而不是绑定
 
-见根目录 [CLAUDE.md](../CLAUDE.md) 和 [internal/transcribe/CLAUDE.md](../internal/transcribe/CLAUDE.md)：不需要在目标机器上装 C/C++ 工具链就能 `go build` 这个仓库；whisper-cli 崩溃不会把 Go 主进程一起带崩；换 CPU 版/CUDA 版 whisper.cpp，只需要换 `bin/whisper/` 目录下的可执行文件，不需要重新编译 Go 代码。
+见根目录 [CLAUDE.md](../CLAUDE.md)（"internal/transcribe" 一节）：不需要在目标机器上装 C/C++ 工具链就能 `go build` 这个仓库；whisper-cli 崩溃不会把 Go 主进程一起带崩；换 CPU 版/CUDA 版 whisper.cpp，只需要换 `bin/whisper/` 目录下的可执行文件，不需要重新编译 Go 代码。
