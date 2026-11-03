@@ -296,8 +296,8 @@ func TestEnsureWritable(t *testing.T) {
 	if err := EnsureWritable(notYetExisting); err != nil {
 		t.Errorf("EnsureWritable(new file) = %v, want nil", err)
 	}
-	if _, err := os.Stat(notYetExisting); err != nil {
-		t.Errorf("expected probe to create the file: %v", err)
+	if _, err := os.Stat(notYetExisting); err == nil {
+		t.Errorf("probe must not leave a newly created empty file behind")
 	}
 
 	existing := filepath.Join(dir, "existing.srt")

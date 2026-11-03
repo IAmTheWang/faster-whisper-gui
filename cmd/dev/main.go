@@ -15,6 +15,7 @@ import (
 	"errors"
 	"flag"
 	"log"
+	"net"
 	"net/http"
 	"os"
 	"os/exec"
@@ -49,22 +50,29 @@ func main() {
 		cfg.Addr = *addr
 	}
 
-	if err := cfg.CleanTmpDir(); err != nil {
-		log.Printf("warning: failed to clean tmp dir %s: %v", cfg.TmpDir, err)
-	}
-
 	srv, err := appserver.New(cfg)
 	if err != nil {
 		log.Fatalf("build server: %v", err)
 	}
 
+	// Bind before touching tmp/ so a second instance that can't bind doesn't
+	// wipe the running one's scratch files.
+	ln, err := net.Listen("tcp", cfg.Addr)
+	if err != nil {
+		log.Fatalf("listen on %s: %v", cfg.Addr, err)
+	}
+	if err := cfg.CleanTmpDir(); err != nil {
+		log.Printf("warning: failed to clean tmp dir %s: %v", cfg.TmpDir, err)
+	}
+
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt)
 	defer stop()
 
+	serveErr := make(chan error, 1)
 	go func() {
 		log.Printf("[go]   backend listening on http://%s", cfg.Addr)
-		if err := srv.ListenAndServe(); err != nil && !errors.Is(err, http.ErrServerClosed) {
-			log.Printf("[go]   server error: %v", err)
+		if err := srv.Serve(ln); err != nil && !errors.Is(err, http.ErrServerClosed) {
+			serveErr <- err
 		}
 	}()
 
@@ -77,14 +85,27 @@ func main() {
 
 	vite, err := procutil.Start(viteCmd)
 	if err != nil {
+		_ = srv.Close()
 		log.Fatalf("start vite dev server (in %s): %v", webDir, err)
 	}
 	defer vite.Close()
 
+	viteExited := make(chan error, 1)
+	go func() { viteExited <- vite.Wait() }()
+
 	log.Printf("[vite] starting frontend dev server in %s ...", webDir)
 	log.Println("open the URL Vite prints below (usually http://localhost:5173) — it proxies /api to the Go backend above")
 
-	<-ctx.Done()
+	// Either half dying takes the whole dev session down, instead of leaving
+	// the other running with nothing useful to talk to.
+	select {
+	case <-ctx.Done():
+	case err := <-serveErr:
+		log.Printf("[go]   server error: %v", err)
+	case err := <-viteExited:
+		log.Printf("[vite] exited: %v", err)
+		viteExited <- err // keep the value for the shutdown wait below
+	}
 	log.Println("shutting down...")
 
 	shutdownCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
@@ -96,5 +117,5 @@ func main() {
 	if err := vite.Stop(); err != nil {
 		log.Printf("[vite] stop error: %v", err)
 	}
-	_ = vite.Wait()
+	<-viteExited
 }

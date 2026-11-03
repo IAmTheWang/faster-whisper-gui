@@ -98,6 +98,12 @@ func spaHandler(distFS fs.FS) http.Handler {
 			upath = "index.html"
 		}
 		if _, err := fs.Stat(distFS, upath); err != nil {
+			// A missing asset (anything with a file extension) is a real 404;
+			// only extension-less paths are SPA routes that get index.html.
+			if path.Ext(upath) != "" {
+				http.NotFound(w, r)
+				return
+			}
 			upath = "index.html"
 		}
 		http.ServeFileFS(w, r, distFS, upath)

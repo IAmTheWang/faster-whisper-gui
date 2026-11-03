@@ -1,6 +1,8 @@
 package httpapi
 
 import (
+	"errors"
+	"io/fs"
 	"net/http"
 
 	"faster-whisper-gui/internal/fsbrowse"
@@ -52,7 +54,14 @@ func (s *Server) handleBrowse(w http.ResponseWriter, r *http.Request) {
 		listing, err = fsbrowse.List(dir)
 	}
 	if err != nil {
-		writeError(w, http.StatusInternalServerError, err)
+		status := http.StatusInternalServerError
+		switch {
+		case errors.Is(err, fs.ErrNotExist):
+			status = http.StatusNotFound
+		case errors.Is(err, fs.ErrPermission):
+			status = http.StatusForbidden
+		}
+		writeError(w, status, err)
 		return
 	}
 	writeJSON(w, http.StatusOK, listing)

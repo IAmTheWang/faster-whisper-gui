@@ -16,6 +16,8 @@ type Server struct {
 	Store  *job.Store
 	Queue  *job.Queue
 	Broker *sseutil.Broker
+
+	health healthCache
 }
 
 func NewServer(cfg *config.Config, store *job.Store, queue *job.Queue, broker *sseutil.Broker) *Server {

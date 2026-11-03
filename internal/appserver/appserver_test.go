@@ -1,6 +1,10 @@
 package appserver
 
-import "testing"
+import (
+	"net/http/httptest"
+	"testing"
+	"testing/fstest"
+)
 
 func TestRequireLoopbackAddr(t *testing.T) {
 	for _, ok := range []string{"127.0.0.1:8080", "localhost:8080", "[::1]:8080", "127.0.0.2:1"} {
@@ -11,6 +15,25 @@ func TestRequireLoopbackAddr(t *testing.T) {
 	for _, bad := range []string{"0.0.0.0:8080", ":8080", "192.168.1.5:8080", "example.com:80", "nonsense"} {
 		if err := requireLoopbackAddr(bad); err == nil {
 			t.Errorf("requireLoopbackAddr(%q) = nil, want error", bad)
+		}
+	}
+}
+
+func TestSpaHandlerFallback(t *testing.T) {
+	h := spaHandler(fstest.MapFS{
+		"index.html":    {Data: []byte("<html>app</html>")},
+		"assets/app.js": {Data: []byte("js")},
+	})
+	for path, want := range map[string]int{
+		"/":               200,
+		"/assets/app.js":  200,
+		"/some/route":     200, // extension-less: SPA fallback
+		"/assets/gone.js": 404, // missing asset must not return index.html
+	} {
+		rr := httptest.NewRecorder()
+		h.ServeHTTP(rr, httptest.NewRequest("GET", path, nil))
+		if rr.Code != want {
+			t.Errorf("GET %s = %d, want %d", path, rr.Code, want)
 		}
 	}
 }

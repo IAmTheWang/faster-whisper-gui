@@ -270,12 +270,23 @@ func validateFile(p string, match func(string) bool, what string) (string, error
 // has it open). Any error is returned as-is: Windows reports a locked file
 // as a sharing violation, not os.ErrPermission, so callers should treat any
 // error here as "not writable" rather than pattern-matching a specific one.
+//
+// A file the probe had to create is removed again, so a job that is later
+// queued, canceled or failed never leaves an empty .srt next to the media.
 func EnsureWritable(path string) error {
+	_, statErr := os.Stat(path)
+	existed := statErr == nil
 	f, err := os.OpenFile(path, os.O_WRONLY|os.O_CREATE, 0o666)
 	if err != nil {
 		return err
 	}
-	return f.Close()
+	if err := f.Close(); err != nil {
+		return err
+	}
+	if !existed {
+		_ = os.Remove(path)
+	}
+	return nil
 }
 
 // CopyFile copies src to dst, creating or truncating dst. Used by the job
@@ -296,14 +307,25 @@ func CopyFile(src, dst string) error {
 		}
 	}
 
-	out, err := os.OpenFile(dst, os.O_WRONLY|os.O_CREATE|os.O_TRUNC, 0o666)
+	// Copy into a temp file beside dst and rename it over dst, so a failed or
+	// interrupted copy never leaves a partial subtitle file at dst.
+	out, err := os.CreateTemp(filepath.Dir(dst), ".copy-*.tmp")
 	if err != nil {
 		return err
 	}
-	defer out.Close()
-
+	tmpPath := out.Name()
 	if _, err := io.Copy(out, in); err != nil {
+		out.Close()
+		os.Remove(tmpPath)
 		return err
 	}
-	return out.Close()
+	if err := out.Close(); err != nil {
+		os.Remove(tmpPath)
+		return err
+	}
+	if err := os.Rename(tmpPath, dst); err != nil {
+		os.Remove(tmpPath)
+		return err
+	}
+	return nil
 }

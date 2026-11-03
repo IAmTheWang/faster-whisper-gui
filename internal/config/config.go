@@ -49,7 +49,7 @@ func Load(root string) (*Config, error) {
 		// `go run` compiles to a throwaway directory under %TEMP% (go-build...);
 		// using that as the root would put bin/, models/ and settings.json
 		// somewhere that changes every run. Fall back to the working directory.
-		if strings.Contains(strings.ToLower(root), "go-build") {
+		if isGoRunDir(root) {
 			if wd, err := os.Getwd(); err == nil {
 				root = wd
 			}
@@ -144,4 +144,21 @@ func (c *Config) CleanTmpDir() error {
 		}
 	}
 	return nil
+}
+
+// isGoRunDir reports whether dir looks like the throwaway build directory
+// `go run` executes from: a "go-build..." directory under the OS temp dir.
+// Requiring both avoids misfiring on a real install path that merely
+// contains "go-build".
+func isGoRunDir(dir string) bool {
+	rel, err := filepath.Rel(os.TempDir(), dir)
+	if err != nil || rel == "." || strings.HasPrefix(rel, "..") {
+		return false
+	}
+	for _, part := range strings.Split(rel, string(filepath.Separator)) {
+		if strings.HasPrefix(strings.ToLower(part), "go-build") {
+			return true
+		}
+	}
+	return false
 }

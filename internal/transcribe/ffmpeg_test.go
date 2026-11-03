@@ -8,6 +8,7 @@ import (
 func TestExtractAudioArgs(t *testing.T) {
 	got := ExtractAudioArgs(`E:\videos\lecture1.mp4`, `E:\tmp\job1.wav`)
 	want := []string{
+		"-nostdin", "-nostats", "-hide_banner", "-loglevel", "error",
 		"-y",
 		"-i", `E:\videos\lecture1.mp4`,
 		"-vn",

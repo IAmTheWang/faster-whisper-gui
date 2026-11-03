@@ -21,6 +21,9 @@ import (
 // when the input has no video stream to drop.
 func ExtractAudioArgs(mediaPath, outWavPath string) []string {
 	return []string{
+		// Never read stdin; quiet logging so stderr holds only real errors
+		// rather than megabytes of progress-stat noise.
+		"-nostdin", "-nostats", "-hide_banner", "-loglevel", "error",
 		"-y",
 		"-i", mediaPath,
 		"-vn",
@@ -37,8 +40,8 @@ func ExtractAudioArgs(mediaPath, outWavPath string) []string {
 // the tail of ffmpeg's stderr output.
 func ExtractAudio(ctx context.Context, ffmpegPath, mediaPath, outWavPath string) error {
 	cmd := exec.Command(ffmpegPath, ExtractAudioArgs(mediaPath, outWavPath)...)
-	var stderr bytes.Buffer
-	cmd.Stderr = &stderr
+	stderr := newTailBuffer(16 << 10)
+	cmd.Stderr = stderr
 
 	mp, err := procutil.StartContext(ctx, cmd)
 	if err != nil {
@@ -67,9 +70,10 @@ func ProbeDurationArgs(mediaPath string) []string {
 // ProbeDuration runs ffprobe and returns mediaPath's duration.
 func ProbeDuration(ctx context.Context, ffprobePath, mediaPath string) (time.Duration, error) {
 	cmd := exec.Command(ffprobePath, ProbeDurationArgs(mediaPath)...)
-	var stdout, stderr bytes.Buffer
+	var stdout bytes.Buffer
+	stderr := newTailBuffer(16 << 10)
 	cmd.Stdout = &stdout
-	cmd.Stderr = &stderr
+	cmd.Stderr = stderr
 
 	mp, err := procutil.StartContext(ctx, cmd)
 	if err != nil {

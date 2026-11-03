@@ -1,6 +1,7 @@
 package config
 
 import (
+	"os"
 	"path/filepath"
 	"testing"
 )
@@ -66,5 +67,18 @@ func TestEffectivePathsUseOverrides(t *testing.T) {
 	}
 	if got := cfg.EffectiveDefaultVideoDir(); got != overrideVideoDir {
 		t.Errorf("EffectiveDefaultVideoDir() = %q, want override %q", got, overrideVideoDir)
+	}
+}
+
+func TestIsGoRunDir(t *testing.T) {
+	tmp := os.TempDir()
+	if !isGoRunDir(filepath.Join(tmp, "go-build123456", "b001", "exe")) {
+		t.Error("go run build dir under TEMP should be detected")
+	}
+	if isGoRunDir(filepath.Join(tmp, "my-tool")) {
+		t.Error("ordinary temp subdirectory is not a go run dir")
+	}
+	if isGoRunDir(`E:\tools\go-build-helper`) {
+		t.Error("a real install path containing go-build must not be treated as go run")
 	}
 }

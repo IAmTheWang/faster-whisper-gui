@@ -7,8 +7,15 @@
 package main
 
 import (
+	"context"
+	"errors"
 	"flag"
 	"log"
+	"net"
+	"net/http"
+	"os"
+	"os/signal"
+	"time"
 
 	"faster-whisper-gui/internal/appserver"
 	"faster-whisper-gui/internal/config"
@@ -27,15 +34,41 @@ func main() {
 		cfg.Addr = *addr
 	}
 
-	if err := cfg.CleanTmpDir(); err != nil {
-		log.Printf("warning: failed to clean tmp dir %s: %v", cfg.TmpDir, err)
-	}
-
 	srv, err := appserver.New(cfg)
 	if err != nil {
 		log.Fatalf("build server: %v", err)
 	}
 
+	// Bind before touching tmp/: a second instance that fails to bind must
+	// not wipe the scratch WAVs of the instance that is already running.
+	ln, err := net.Listen("tcp", cfg.Addr)
+	if err != nil {
+		log.Fatalf("listen on %s: %v", cfg.Addr, err)
+	}
+	if err := cfg.CleanTmpDir(); err != nil {
+		log.Printf("warning: failed to clean tmp dir %s: %v", cfg.TmpDir, err)
+	}
+
+	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt)
+	defer stop()
+
+	serveErr := make(chan error, 1)
+	go func() { serveErr <- srv.Serve(ln) }()
 	log.Printf("faster-whisper-gui listening on http://%s", cfg.Addr)
-	log.Fatal(srv.ListenAndServe())
+
+	select {
+	case err := <-serveErr:
+		log.Fatalf("server: %v", err)
+	case <-ctx.Done():
+	}
+
+	log.Println("shutting down...")
+	shutdownCtx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+	defer cancel()
+	// Open SSE streams never end on their own, so Shutdown may time out;
+	// Close then drops them. Running whisper/ffmpeg children are killed by
+	// their Job Objects when this process exits.
+	if err := srv.Shutdown(shutdownCtx); err != nil && !errors.Is(err, http.ErrServerClosed) {
+		_ = srv.Close()
+	}
 }

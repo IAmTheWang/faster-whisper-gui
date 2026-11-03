@@ -70,3 +70,13 @@ func TestValidateJobOptions(t *testing.T) {
 		}
 	}
 }
+
+func TestUnknownAPIRouteIsJSON404(t *testing.T) {
+	mux := http.NewServeMux()
+	(&Server{}).RegisterRoutes(mux)
+	rr := httptest.NewRecorder()
+	mux.ServeHTTP(rr, httptest.NewRequest("GET", "/api/typo", nil))
+	if rr.Code != 404 || !strings.Contains(rr.Header().Get("Content-Type"), "application/json") {
+		t.Fatalf("got %d %q, want JSON 404", rr.Code, rr.Header().Get("Content-Type"))
+	}
+}

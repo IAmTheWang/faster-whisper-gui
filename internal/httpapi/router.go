@@ -19,4 +19,9 @@ func (s *Server) RegisterRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("GET /api/jobs/{id}/events", s.handleJobEvents)
 	mux.HandleFunc("POST /api/jobs/{id}/cancel", s.handleCancelJob)
 	mux.HandleFunc("POST /api/jobs/{id}/export", s.handleExportJob)
+	// Anything else under /api/ is a JSON 404 rather than falling through to
+	// the SPA's index.html.
+	mux.HandleFunc("/api/", func(w http.ResponseWriter, r *http.Request) {
+		writeErrorMsg(w, http.StatusNotFound, "no such API endpoint: "+r.Method+" "+r.URL.Path)
+	})
 }
