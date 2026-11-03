@@ -1,9 +1,11 @@
 package httpapi
 
 import (
+	"errors"
 	"net/http"
 
 	"faster-whisper-gui/internal/fsbrowse"
+	"faster-whisper-gui/internal/settings"
 )
 
 // settingsResponse reports both the user's current overrides and the
@@ -51,6 +53,31 @@ type updateSettingsRequest struct {
 	DefaultVideoDir *string `json:"defaultVideoDir"`
 }
 
+// pathError marks a validation failure (the client's fault, 400) as opposed
+// to a failure persisting settings.json (500).
+type pathError struct{ msg string }
+
+func (e *pathError) Error() string { return e.msg }
+
+// applyPath implements the tri-state PUT semantics for one field: nil
+// leaves *dst untouched, "" clears the override, anything else must pass
+// validate and is stored in its cleaned form.
+func applyPath(dst *string, req *string, validate func(string) (string, error), what string) error {
+	if req == nil {
+		return nil
+	}
+	if *req == "" {
+		*dst = ""
+		return nil
+	}
+	p, err := validate(*req)
+	if err != nil {
+		return &pathError{"invalid " + what + ": " + err.Error()}
+	}
+	*dst = p
+	return nil
+}
+
 // handleUpdateSettings validates and persists any fields present in the
 // request body, leaving fields not present untouched.
 func (s *Server) handleUpdateSettings(w http.ResponseWriter, r *http.Request) {
@@ -60,62 +87,21 @@ func (s *Server) handleUpdateSettings(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	current := s.Config.Settings.Get()
-
-	if req.FfmpegPath != nil {
-		if *req.FfmpegPath == "" {
-			current.FfmpegPath = ""
+	_, err := s.Config.Settings.Update(func(cur *settings.Paths) error {
+		return errors.Join(
+			applyPath(&cur.FfmpegPath, req.FfmpegPath, fsbrowse.ValidateExeFile, "ffmpeg path"),
+			applyPath(&cur.WhisperCliPath, req.WhisperCliPath, fsbrowse.ValidateExeFile, "whisper-cli path"),
+			applyPath(&cur.ModelsDir, req.ModelsDir, fsbrowse.ValidateAbsDir, "models directory"),
+			applyPath(&cur.DefaultVideoDir, req.DefaultVideoDir, fsbrowse.ValidateAbsDir, "default media directory"),
+		)
+	})
+	if err != nil {
+		var ve *pathError
+		if errors.As(err, &ve) {
+			writeError(w, http.StatusBadRequest, err)
 		} else {
-			p, err := fsbrowse.ValidateExeFile(*req.FfmpegPath)
-			if err != nil {
-				writeErrorMsg(w, http.StatusBadRequest, "invalid ffmpeg path: "+err.Error())
-				return
-			}
-			current.FfmpegPath = p
+			writeError(w, http.StatusInternalServerError, err)
 		}
-	}
-
-	if req.WhisperCliPath != nil {
-		if *req.WhisperCliPath == "" {
-			current.WhisperCliPath = ""
-		} else {
-			p, err := fsbrowse.ValidateExeFile(*req.WhisperCliPath)
-			if err != nil {
-				writeErrorMsg(w, http.StatusBadRequest, "invalid whisper-cli path: "+err.Error())
-				return
-			}
-			current.WhisperCliPath = p
-		}
-	}
-
-	if req.ModelsDir != nil {
-		if *req.ModelsDir == "" {
-			current.ModelsDir = ""
-		} else {
-			d, err := fsbrowse.ValidateAbsDir(*req.ModelsDir)
-			if err != nil {
-				writeErrorMsg(w, http.StatusBadRequest, "invalid models directory: "+err.Error())
-				return
-			}
-			current.ModelsDir = d
-		}
-	}
-
-	if req.DefaultVideoDir != nil {
-		if *req.DefaultVideoDir == "" {
-			current.DefaultVideoDir = ""
-		} else {
-			d, err := fsbrowse.ValidateAbsDir(*req.DefaultVideoDir)
-			if err != nil {
-				writeErrorMsg(w, http.StatusBadRequest, "invalid default video directory: "+err.Error())
-				return
-			}
-			current.DefaultVideoDir = d
-		}
-	}
-
-	if err := s.Config.Settings.Set(current); err != nil {
-		writeError(w, http.StatusInternalServerError, err)
 		return
 	}
 

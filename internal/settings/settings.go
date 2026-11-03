@@ -29,7 +29,9 @@ type Paths struct {
 type Store struct {
 	filePath string
 
-	mu      sync.RWMutex
+	writeMu sync.Mutex // serializes Set/Update, including the disk write
+
+	mu      sync.RWMutex // guards current
 	current Paths
 }
 
@@ -67,6 +69,29 @@ func (s *Store) Get() Paths {
 // (temp file + rename) so a crash mid-write can't leave a half-written
 // settings.json behind for the next Load to choke on.
 func (s *Store) Set(p Paths) error {
+	s.writeMu.Lock()
+	defer s.writeMu.Unlock()
+	return s.setLocked(p)
+}
+
+// Update applies fn to the current value and persists the result as one
+// atomic read-modify-write, so two concurrent updates to different fields
+// can't overwrite each other. If fn returns an error nothing is written.
+func (s *Store) Update(fn func(*Paths) error) (Paths, error) {
+	s.writeMu.Lock()
+	defer s.writeMu.Unlock()
+	p := s.Get()
+	if err := fn(&p); err != nil {
+		return p, err
+	}
+	if err := s.setLocked(p); err != nil {
+		return p, err
+	}
+	return p, nil
+}
+
+// setLocked does the write; callers must hold writeMu.
+func (s *Store) setLocked(p Paths) error {
 	data, err := json.MarshalIndent(p, "", "  ")
 	if err != nil {
 		return fmt.Errorf("marshal settings: %w", err)

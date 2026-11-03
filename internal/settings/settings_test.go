@@ -3,6 +3,7 @@ package settings
 import (
 	"os"
 	"path/filepath"
+	"sync"
 	"testing"
 )
 
@@ -84,5 +85,57 @@ func TestSetLeavesNoTempFiles(t *testing.T) {
 			names = append(names, e.Name())
 		}
 		t.Fatalf("directory entries after Set = %v, want only settings.json", names)
+	}
+}
+
+func TestUpdateConcurrentFieldsDoNotClobber(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "settings.json")
+	s, err := Load(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	setters := []func(*Paths){
+		func(p *Paths) { p.FfmpegPath = `C:\a\ffmpeg.exe` },
+		func(p *Paths) { p.WhisperCliPath = `C:\a\whisper-cli.exe` },
+		func(p *Paths) { p.ModelsDir = `C:\a\models` },
+		func(p *Paths) { p.DefaultVideoDir = `C:\a\videos` },
+	}
+	var wg sync.WaitGroup
+	for _, set := range setters {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			for i := 0; i < 10; i++ {
+				if _, err := s.Update(func(p *Paths) error { set(p); return nil }); err != nil {
+					t.Error(err)
+				}
+			}
+		}()
+	}
+	wg.Wait()
+
+	reloaded, err := Load(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	got := reloaded.Get()
+	if got.FfmpegPath == "" || got.WhisperCliPath == "" || got.ModelsDir == "" || got.DefaultVideoDir == "" {
+		t.Fatalf("an update was lost: %+v", got)
+	}
+}
+
+func TestUpdateErrorWritesNothing(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "settings.json")
+	s, _ := Load(path)
+	_, err := s.Update(func(p *Paths) error { p.ModelsDir = "x"; return os.ErrInvalid })
+	if err == nil {
+		t.Fatal("want error")
+	}
+	if s.Get().ModelsDir != "" {
+		t.Fatal("failed Update must not change the stored value")
+	}
+	if _, statErr := os.Stat(path); statErr == nil {
+		t.Fatal("failed Update must not create settings.json")
 	}
 }
