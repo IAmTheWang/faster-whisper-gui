@@ -82,3 +82,47 @@ func TestIsGoRunDir(t *testing.T) {
 		t.Error("a real install path containing go-build must not be treated as go run")
 	}
 }
+
+func TestLoadCreatesLayoutAndCleanTmpDirWipesIt(t *testing.T) {
+	root := t.TempDir()
+	cfg, err := Load(root)
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	for _, d := range []string{cfg.WhisperDir, cfg.FfmpegDir, cfg.ModelsDir, cfg.TmpDir} {
+		if info, err := os.Stat(d); err != nil || !info.IsDir() {
+			t.Errorf("expected %s to be created by Load: %v", d, err)
+		}
+	}
+	if cfg.Settings == nil {
+		t.Fatal("Load must attach a settings store")
+	}
+
+	stale := filepath.Join(cfg.TmpDir, "stale.wav")
+	if err := os.WriteFile(stale, []byte("x"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Mkdir(filepath.Join(cfg.TmpDir, "subdir"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := cfg.CleanTmpDir(); err != nil {
+		t.Fatalf("CleanTmpDir: %v", err)
+	}
+	entries, _ := os.ReadDir(cfg.TmpDir)
+	if len(entries) != 0 {
+		t.Fatalf("tmp dir not emptied: %v", entries)
+	}
+	if _, err := os.Stat(cfg.TmpDir); err != nil {
+		t.Fatal("CleanTmpDir must keep the directory itself")
+	}
+}
+
+func TestLoadRejectsCorruptSettings(t *testing.T) {
+	root := t.TempDir()
+	if err := os.WriteFile(filepath.Join(root, "settings.json"), []byte("{not json"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := Load(root); err == nil {
+		t.Fatal("a corrupt settings.json must surface as a Load error")
+	}
+}
