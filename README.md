@@ -78,8 +78,12 @@ cd web && bun run dev
 ## Testing
 
 ```bash
-go test ./...
+go test ./...                    # backend
+cd web && bun run test           # frontend (vitest)
+powershell -File scripts/build.ps1   # everything: frontend tests+build, go vet/test, single-exe build
 ```
+
+CI (`.github/workflows/ci.yml`) runs the same steps on Windows, including `go test -race`.
 
 ## Architecture at a glance
 
@@ -88,12 +92,13 @@ go test ./...
 - **Batch jobs, serial execution**: you can check and start several video/audio files at once, sharing one model/language/output config, but they're queued and run one at a time — a single GPU can't usefully run concurrent whisper-cli processes. The Progress panel's tabs just let you monitor several jobs' states side by side, not run them in parallel.
 - **Progress reporting**: SSE (`GET /api/jobs/{id}/events`), primarily derived from whisper-cli's own per-segment timestamps, supplemented by its built-in percentage output.
 - **Save is additive**: the `.srt` is always written to its real destination the moment a job finishes, exactly as before; "Save"/"Save All Completed" (`POST /api/jobs/{id}/export`) just copies an already-finished job's `.srt` to a second location on demand.
-- **Process robustness**: ffmpeg/whisper-cli subprocesses are managed through a Windows Job Object, so canceling a job or the server itself crashing never leaves an orphaned process behind.
+- **Process robustness**: ffmpeg/whisper-cli subprocesses are managed through a Windows Job Object, so canceling a job (queued or running) or the server itself crashing never leaves an orphaned process behind.
+- **Local-only by design**: the server only listens on loopback, rejects requests with a non-loopback `Host`/`Origin` (DNS rebinding, cross-site POSTs), and refuses UNC/device paths — the API can browse your disk and point the app at executables, so it must not be reachable from a web page you happen to visit.
 - See `CLAUDE.md` for the full design rationale behind each of these.
 
 ## Known limitations
 
-- Job history is in-memory only and is lost on restart.
+- Job history is in-memory only and is lost on restart; at most the 200 most recent jobs are kept, and at most 64 jobs can be waiting at once.
 - Model/binary files must be downloaded and placed manually — no auto-download.
 - Only CPU + NVIDIA CUDA are covered; AMD/Intel Vulkan builds are out of scope.
 - Windows only.

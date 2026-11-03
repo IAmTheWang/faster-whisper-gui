@@ -78,8 +78,12 @@ cd web && bun run dev
 ## 测试
 
 ```bash
-go test ./...
+go test ./...                    # 后端
+cd web && bun run test           # 前端（vitest）
+powershell -File scripts/build.ps1   # 一键：前端测试+构建、go vet/test、打包单个 exe
 ```
+
+CI（`.github/workflows/ci.yml`）在 Windows 上跑同样的步骤，并带 `go test -race`。
 
 ## 架构简述
 
@@ -88,12 +92,13 @@ go test ./...
 - **批量任务，串行执行**：可以一次勾选多个视频/音频文件并共用一套模型/语言/输出配置一起启动，但它们仍会排队、一次只跑一个——单块 GPU 同时跑多个 whisper-cli 进程没有意义。Progress 面板的多标签页只是让你能并排观察多个任务的状态，并不是真的并行执行。
 - **进度上报**：SSE（`GET /api/jobs/{id}/events`），主要信号来自 whisper-cli 输出的分段时间戳，辅以其自带的百分比行。
 - **Save 是纯新增功能**：任务一完成，`.srt` 依然会照常写到它真正的目标位置，这一点完全没变；"Save"/"Save All Completed"（`POST /api/jobs/{id}/export`）只是按需把一个已完成任务的 `.srt` 再复制一份到另一个位置。
-- **进程健壮性**：ffmpeg/whisper-cli 子进程通过 Windows Job Object 托管，取消任务或本程序自身崩溃退出都不会留下孤儿进程。
+- **进程健壮性**：ffmpeg/whisper-cli 子进程通过 Windows Job Object 托管，取消任务（排队中或运行中）或本程序自身崩溃退出都不会留下孤儿进程。
+- **仅限本机**：服务只监听回环地址，拒绝 `Host`/`Origin` 不是回环地址的请求（防 DNS 重绑定、跨站 POST），并拒绝 UNC/设备路径——这个 API 能浏览磁盘、能指定可执行文件，绝不能让你随手打开的网页够得着。
 - 更完整的设计背景见根目录的 `CLAUDE.md`。
 
 ## 已知限制
 
-- 任务历史仅存内存，重启后清空。
+- 任务历史仅存内存，重启后清空；最多保留最近 200 个任务，同时最多排队 64 个。
 - 模型/二进制文件需手动下载放置，没有自动下载。
 - 仅覆盖 CPU + NVIDIA CUDA；AMD/Intel 显卡的 Vulkan 版本不在范围内。
 - 仅支持 Windows。
