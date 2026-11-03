@@ -44,3 +44,15 @@ func (sw *statusWriter) WriteHeader(code int) {
 	sw.status = code
 	sw.ResponseWriter.WriteHeader(code)
 }
+
+// Unwrap lets http.NewResponseController reach the underlying writer's
+// Flush/SetWriteDeadline; without it the SSE handler's Flush fails with
+// ErrNotSupported when served through this middleware.
+func (sw *statusWriter) Unwrap() http.ResponseWriter { return sw.ResponseWriter }
+
+// Flush keeps plain w.(http.Flusher) assertions working too.
+func (sw *statusWriter) Flush() {
+	if f, ok := sw.ResponseWriter.(http.Flusher); ok {
+		f.Flush()
+	}
+}

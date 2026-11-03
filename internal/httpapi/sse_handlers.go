@@ -22,11 +22,16 @@ const sseHeartbeatInterval = 15 * time.Second
 // connection from being treated as idle while progress is sparse.
 func (s *Server) handleJobEvents(w http.ResponseWriter, r *http.Request) {
 	id := r.PathValue("id")
-	initial, ok := s.Store.Get(id)
-	if !ok {
+	if _, ok := s.Store.Get(id); !ok {
 		writeErrorMsg(w, http.StatusNotFound, "job not found")
 		return
 	}
+
+	// Subscribe before taking the snapshot: a job finishing in between would
+	// otherwise be missed by both the snapshot and the subscription.
+	ch, unsubscribe := s.Broker.Subscribe(id)
+	defer unsubscribe()
+	initial, _ := s.Store.Get(id)
 
 	w.Header().Set("Content-Type", "text/event-stream")
 	w.Header().Set("Cache-Control", "no-cache")
@@ -35,9 +40,6 @@ func (s *Server) handleJobEvents(w http.ResponseWriter, r *http.Request) {
 
 	rc := http.NewResponseController(w)
 	_ = rc.SetWriteDeadline(time.Time{})
-
-	ch, unsubscribe := s.Broker.Subscribe(id)
-	defer unsubscribe()
 
 	if !writeSSE(w, rc, sseEventFromJob(initial)) {
 		return
@@ -55,6 +57,12 @@ func (s *Server) handleJobEvents(w http.ResponseWriter, r *http.Request) {
 			return
 
 		case <-heartbeat.C:
+			// Publish is best-effort, so a terminal event can be dropped for a
+			// slow client; the store is the source of truth.
+			if cur, ok := s.Store.Get(id); ok && cur.Status.IsTerminal() {
+				writeSSE(w, rc, sseEventFromJob(cur))
+				return
+			}
 			if _, err := io.WriteString(w, ": heartbeat\n\n"); err != nil {
 				return
 			}
