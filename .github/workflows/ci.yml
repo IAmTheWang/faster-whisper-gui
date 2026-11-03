@@ -1,0 +1,45 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+# Windows only: fsbrowse and procutil call golang.org/x/sys/windows directly.
+jobs:
+  build-test:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version-file: web/package.json
+
+      - name: Frontend install
+        working-directory: web
+        run: bun install --frozen-lockfile
+
+      - name: Frontend test
+        working-directory: web
+        run: bun run test
+
+      # tsc --noEmit + vite build; output lands in internal/webui/dist for go:embed
+      - name: Frontend build
+        working-directory: web
+        run: bun run build
+
+      - name: go vet
+        run: go vet ./...
+
+      - name: go test (race detector needs cgo; windows-latest ships gcc)
+        env:
+          CGO_ENABLED: "1"
+        run: go test -race ./...
+
+      - name: go build
+        run: go build ./cmd/server
