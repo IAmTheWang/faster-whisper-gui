@@ -106,7 +106,7 @@ type progressUpdate struct {
 // whisper-cli's own stderr percentage line; onProgress is called with the
 // running best (monotonically non-decreasing) estimate.
 func (e *WhisperCppEngine) Transcribe(ctx context.Context, opts Options, onProgress func(Progress)) error {
-	cmd := exec.CommandContext(ctx, e.CliPath(), BuildWhisperArgs(opts)...)
+	cmd := exec.Command(e.CliPath(), BuildWhisperArgs(opts)...)
 
 	stdoutPipe, err := cmd.StdoutPipe()
 	if err != nil {
@@ -117,7 +117,7 @@ func (e *WhisperCppEngine) Transcribe(ctx context.Context, opts Options, onProgr
 		return fmt.Errorf("whisper-cli stderr pipe: %w", err)
 	}
 
-	mp, err := procutil.Start(cmd)
+	mp, err := procutil.StartContext(ctx, cmd)
 	if err != nil {
 		return fmt.Errorf("start whisper-cli: %w", err)
 	}

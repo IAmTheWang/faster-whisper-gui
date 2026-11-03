@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"fmt"
+	"math"
 	"os/exec"
 	"strconv"
 	"strings"
@@ -35,11 +36,11 @@ func ExtractAudioArgs(mediaPath, outWavPath string) []string {
 // orphaned ffmpeg process behind. On failure, the returned error includes
 // the tail of ffmpeg's stderr output.
 func ExtractAudio(ctx context.Context, ffmpegPath, mediaPath, outWavPath string) error {
-	cmd := exec.CommandContext(ctx, ffmpegPath, ExtractAudioArgs(mediaPath, outWavPath)...)
+	cmd := exec.Command(ffmpegPath, ExtractAudioArgs(mediaPath, outWavPath)...)
 	var stderr bytes.Buffer
 	cmd.Stderr = &stderr
 
-	mp, err := procutil.Start(cmd)
+	mp, err := procutil.StartContext(ctx, cmd)
 	if err != nil {
 		return fmt.Errorf("start ffmpeg: %w", err)
 	}
@@ -65,12 +66,12 @@ func ProbeDurationArgs(mediaPath string) []string {
 
 // ProbeDuration runs ffprobe and returns mediaPath's duration.
 func ProbeDuration(ctx context.Context, ffprobePath, mediaPath string) (time.Duration, error) {
-	cmd := exec.CommandContext(ctx, ffprobePath, ProbeDurationArgs(mediaPath)...)
+	cmd := exec.Command(ffprobePath, ProbeDurationArgs(mediaPath)...)
 	var stdout, stderr bytes.Buffer
 	cmd.Stdout = &stdout
 	cmd.Stderr = &stderr
 
-	mp, err := procutil.Start(cmd)
+	mp, err := procutil.StartContext(ctx, cmd)
 	if err != nil {
 		return 0, fmt.Errorf("start ffprobe: %w", err)
 	}
@@ -83,6 +84,9 @@ func ProbeDuration(ctx context.Context, ffprobePath, mediaPath string) (time.Dur
 	seconds, err := strconv.ParseFloat(strings.TrimSpace(stdout.String()), 64)
 	if err != nil {
 		return 0, fmt.Errorf("parse ffprobe duration %q: %w", stdout.String(), err)
+	}
+	if math.IsNaN(seconds) || math.IsInf(seconds, 0) || seconds <= 0 {
+		return 0, fmt.Errorf("ffprobe reported unusable duration %q", strings.TrimSpace(stdout.String()))
 	}
 	return time.Duration(seconds * float64(time.Second)), nil
 }

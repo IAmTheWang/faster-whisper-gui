@@ -4,6 +4,7 @@
 package job
 
 import (
+	"context"
 	"sync"
 	"time"
 )
@@ -61,7 +62,8 @@ type Job struct {
 	CreatedAt time.Time `json:"createdAt"`
 	UpdatedAt time.Time `json:"updatedAt"`
 
-	cancel func() // set by the queue worker once the job starts running; unexported, never serialized
+	ctx    context.Context // set by Queue.Submit; canceled to interrupt the job, queued or running
+	cancel func()          // cancels ctx; unexported, never serialized
 }
 
 // Store is an in-memory, thread-safe collection of jobs, most-recent-first.

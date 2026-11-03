@@ -5,6 +5,7 @@ import (
 	"crypto/rand"
 	"encoding/hex"
 	"fmt"
+	"log/slog"
 	"os"
 	"path/filepath"
 	"time"
@@ -61,45 +62,99 @@ func (q *Queue) Submit(req Request) (*Job, error) {
 		return nil, err
 	}
 	now := time.Now()
+	// The context is created here, not when the worker picks the job up, so a
+	// job that is still waiting in the queue can be canceled too.
+	ctx, cancel := context.WithCancel(context.Background())
 	j := &Job{
 		ID:        id,
 		Request:   req,
 		Status:    StatusQueued,
 		CreatedAt: now,
 		UpdatedAt: now,
+		ctx:       ctx,
+		cancel:    cancel,
 	}
 	q.store.Add(j)
 	q.submit <- j
 	return j, nil
 }
 
+// Cancel requests cancellation of a queued or running job. A job that has not
+// started yet is marked canceled immediately (the worker would otherwise only
+// notice once it reached it); a running job is canceled via its context and
+// ends up canceled once its subprocess unwinds. Returns false if the job
+// doesn't exist or has already finished.
+func (q *Queue) Cancel(id string) bool {
+	if !q.store.Cancel(id) {
+		return false
+	}
+	canceled := false
+	q.store.Update(id, func(j *Job) {
+		if j.Status == StatusQueued {
+			j.Status = StatusCanceled
+			canceled = true
+		}
+	})
+	if canceled {
+		q.events.Publish(id, "canceled", map[string]string{})
+	}
+	return true
+}
+
 func (q *Queue) run() {
 	for j := range q.submit {
-		q.process(j)
+		q.safeProcess(j)
 	}
 }
 
+// safeProcess keeps one job's panic (a nil engine, a bug in a callback) from
+// taking the whole server down with the worker goroutine.
+func (q *Queue) safeProcess(j *Job) {
+	defer func() {
+		if r := recover(); r != nil {
+			slog.Error("job worker panic", "job", j.ID, "panic", r)
+			q.finishWithError(j.ID, context.Background(), fmt.Errorf("internal error: %v", r))
+		}
+	}()
+	q.process(j)
+}
+
 func (q *Queue) process(j *Job) {
-	ctx, cancel := context.WithCancel(context.Background())
-	q.store.SetCancel(j.ID, cancel)
-	defer cancel()
+	ctx := j.ctx
+	defer j.cancel()
+
+	// Canceled while still queued: already marked terminal by Cancel.
+	if cur, ok := q.store.Get(j.ID); !ok || cur.Status.IsTerminal() {
+		return
+	}
 
 	tmpWav := filepath.Join(q.pipeline.TmpDir, j.ID+".wav")
 	defer os.Remove(tmpWav)
 
-	q.setStatus(j.ID, StatusExtractingAudio, 0, "Extracting audio")
+	if !q.setStatus(j.ID, StatusExtractingAudio, 0, "Extracting audio") {
+		return
+	}
 	if err := q.pipeline.ExtractAudio(ctx, j.Request.MediaPath, tmpWav); err != nil {
 		q.finishWithError(j.ID, ctx, err)
 		return
 	}
 
+	// The duration only drives the progress percentage, so a probe failure
+	// (e.g. ffprobe reporting N/A for some webm/mkv files) must not fail the
+	// job — without it the engine falls back to whisper-cli's own percentage.
 	duration, err := q.pipeline.ProbeDuration(ctx, j.Request.MediaPath)
 	if err != nil {
-		q.finishWithError(j.ID, ctx, err)
-		return
+		if ctx.Err() != nil {
+			q.finishWithError(j.ID, ctx, err)
+			return
+		}
+		slog.Warn("could not probe media duration; progress will rely on whisper-cli's own percentage", "job", j.ID, "error", err)
+		duration = 0
 	}
 
-	q.setStatus(j.ID, StatusTranscribing, 0, "Transcribing")
+	if !q.setStatus(j.ID, StatusTranscribing, 0, "Transcribing") {
+		return
+	}
 	opts := transcribe.Options{
 		AudioPath:     tmpWav,
 		ModelPath:     j.Request.ModelPath,
@@ -129,29 +184,53 @@ func (q *Queue) process(j *Job) {
 // finishWithError records a job as canceled (if its context was the reason
 // the step failed) or failed (any other error).
 func (q *Queue) finishWithError(id string, ctx context.Context, err error) {
-	if ctx.Err() != nil {
-		q.store.Update(id, func(j *Job) { j.Status = StatusCanceled })
-		q.events.Publish(id, "canceled", map[string]string{})
-		return
-	}
+	canceled := ctx.Err() != nil
+	changed := false
 	q.store.Update(id, func(j *Job) {
+		if j.Status.IsTerminal() {
+			return // e.g. already marked canceled by Queue.Cancel
+		}
+		changed = true
+		if canceled {
+			j.Status = StatusCanceled
+			return
+		}
 		j.Status = StatusFailed
 		j.Error = err.Error()
 	})
+	if !changed {
+		return
+	}
+	if canceled {
+		q.events.Publish(id, "canceled", map[string]string{})
+		return
+	}
 	q.events.Publish(id, "error", map[string]string{"message": err.Error()})
 }
 
-func (q *Queue) setStatus(id string, status Status, percent float64, message string) {
+// setStatus records a progress update. It returns false, without touching the
+// job, if the job already reached a terminal state (a cancel racing the
+// worker) — the worker must then stop rather than resurrect it.
+func (q *Queue) setStatus(id string, status Status, percent float64, message string) bool {
+	ok := false
 	q.store.Update(id, func(j *Job) {
+		if j.Status.IsTerminal() {
+			return
+		}
+		ok = true
 		j.Status = status
 		j.Percent = percent
 		j.Message = message
 	})
+	if !ok {
+		return false
+	}
 	q.events.Publish(id, "progress", map[string]any{
 		"stage":   string(status),
 		"percent": percent,
 		"message": message,
 	})
+	return true
 }
 
 func newJobID() (string, error) {

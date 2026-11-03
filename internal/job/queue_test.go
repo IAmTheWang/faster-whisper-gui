@@ -201,3 +201,80 @@ func TestQueueEngineFailure(t *testing.T) {
 		t.Fatalf("expected an %q event, got %v", "error", pub.eventTypesFor(j.ID))
 	}
 }
+
+func TestQueueCancelWhileQueued(t *testing.T) {
+	store := NewStore()
+	pub := &fakePublisher{}
+	engine := &fakeEngine{delay: 5 * time.Second}
+	pipeline := Pipeline{
+		ExtractAudio:  noopFfmpeg,
+		ProbeDuration: fixedDuration(time.Second),
+		TmpDir:        t.TempDir(),
+		Engine:        engine,
+	}
+	q := NewQueue(store, pipeline, pub)
+
+	running, _ := q.Submit(Request{MediaPath: `E:\v\1.mp4`, OutputMode: OutputSameAsSource})
+	waiting, _ := q.Submit(Request{MediaPath: `E:\v\2.mp4`, OutputMode: OutputSameAsSource})
+	waitForStatus(t, store, running.ID, StatusTranscribing, 2*time.Second)
+
+	if !q.Cancel(waiting.ID) {
+		t.Fatal("Cancel on a queued job returned false")
+	}
+	waitForStatus(t, store, waiting.ID, StatusCanceled, time.Second)
+
+	// Let the first job finish; the canceled one must never start.
+	q.Cancel(running.ID)
+	waitForStatus(t, store, running.ID, StatusCanceled, 2*time.Second)
+	time.Sleep(50 * time.Millisecond)
+	if j, _ := store.Get(waiting.ID); j.Status != StatusCanceled {
+		t.Fatalf("queued-canceled job ended as %s, want canceled", j.Status)
+	}
+	engine.mu.Lock()
+	defer engine.mu.Unlock()
+	if engine.maxRunning != 1 {
+		t.Fatalf("maxRunning = %d, want 1 (canceled job must not run)", engine.maxRunning)
+	}
+}
+
+type panicEngine struct{}
+
+func (panicEngine) Transcribe(context.Context, transcribe.Options, func(transcribe.Progress)) error {
+	panic("kaboom")
+}
+
+func TestQueueSurvivesWorkerPanic(t *testing.T) {
+	store := NewStore()
+	pub := &fakePublisher{}
+	pipeline := Pipeline{
+		ExtractAudio:  noopFfmpeg,
+		ProbeDuration: fixedDuration(time.Second),
+		TmpDir:        t.TempDir(),
+		Engine:        panicEngine{},
+	}
+	q := NewQueue(store, pipeline, pub)
+
+	j1, _ := q.Submit(Request{MediaPath: `E:\v\1.mp4`, OutputMode: OutputSameAsSource})
+	waitForStatus(t, store, j1.ID, StatusFailed, 2*time.Second)
+
+	// The worker goroutine must still be alive for the next job.
+	j2, _ := q.Submit(Request{MediaPath: `E:\v\2.mp4`, OutputMode: OutputSameAsSource})
+	waitForStatus(t, store, j2.ID, StatusFailed, 2*time.Second)
+}
+
+func TestQueueProbeFailureIsNotFatal(t *testing.T) {
+	store := NewStore()
+	pub := &fakePublisher{}
+	pipeline := Pipeline{
+		ExtractAudio: noopFfmpeg,
+		ProbeDuration: func(context.Context, string) (time.Duration, error) {
+			return 0, errors.New("N/A")
+		},
+		TmpDir: t.TempDir(),
+		Engine: &fakeEngine{},
+	}
+	q := NewQueue(store, pipeline, pub)
+
+	j, _ := q.Submit(Request{MediaPath: `E:\v\1.mp4`, OutputMode: OutputSameAsSource})
+	waitForStatus(t, store, j.ID, StatusDone, 2*time.Second)
+}

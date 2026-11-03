@@ -125,8 +125,8 @@ func (s *Server) handleCancelJob(w http.ResponseWriter, r *http.Request) {
 		writeErrorMsg(w, http.StatusNotFound, "job not found")
 		return
 	}
-	if !s.Store.Cancel(id) {
-		writeErrorMsg(w, http.StatusConflict, "job is not currently running")
+	if !s.Queue.Cancel(id) {
+		writeErrorMsg(w, http.StatusConflict, "job has already finished")
 		return
 	}
 	w.WriteHeader(http.StatusAccepted)

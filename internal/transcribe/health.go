@@ -26,12 +26,12 @@ func probeExecutable(ctx context.Context, path string, args ...string) Component
 	ctx, cancel := context.WithTimeout(ctx, healthCheckTimeout)
 	defer cancel()
 
-	cmd := exec.CommandContext(ctx, path, args...)
+	cmd := exec.Command(path, args...)
 	var out bytes.Buffer
 	cmd.Stdout = &out
 	cmd.Stderr = &out
 
-	mp, err := procutil.Start(cmd)
+	mp, err := procutil.StartContext(ctx, cmd)
 	if err != nil {
 		return ComponentHealth{OK: false, Detail: err.Error()}
 	}
