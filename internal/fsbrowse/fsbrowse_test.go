@@ -372,3 +372,16 @@ func filepathToForwardSlash(p string) string {
 	}
 	return string(out)
 }
+
+func TestCopyFile_SameFileKeepsContent(t *testing.T) {
+	p := filepath.Join(t.TempDir(), "a.srt")
+	if err := os.WriteFile(p, []byte("hello"), 0o666); err != nil {
+		t.Fatal(err)
+	}
+	if err := CopyFile(p, p); err != nil {
+		t.Fatal(err)
+	}
+	if b, _ := os.ReadFile(p); string(b) != "hello" {
+		t.Fatalf("source truncated: %q", b)
+	}
+}

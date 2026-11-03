@@ -154,7 +154,9 @@ func ListFiltered(dir string, kindOf func(name string) string) (Listing, error) 
 		return Listing{}, fmt.Errorf("read dir %s: %w", dir, err)
 	}
 
-	listing := Listing{Path: dir}
+	// Non-nil so an empty directory serializes as [] rather than null (the
+	// frontend reads entries.length).
+	listing := Listing{Path: dir, Entries: []Entry{}}
 	if parent := filepath.Dir(dir); parent != dir {
 		listing.Parent = parent
 	}
@@ -209,6 +211,9 @@ func ValidateAbsDir(p string) (string, error) {
 	if !filepath.IsAbs(clean) {
 		return "", fmt.Errorf("path %q is not absolute", p)
 	}
+	if err := checkSafePath(clean); err != nil {
+		return "", err
+	}
 	info, err := os.Stat(clean)
 	if err != nil {
 		return "", err
@@ -241,6 +246,9 @@ func validateFile(p string, match func(string) bool, what string) (string, error
 	clean := filepath.Clean(filepath.FromSlash(p))
 	if !filepath.IsAbs(clean) {
 		return "", fmt.Errorf("path %q is not absolute", p)
+	}
+	if err := checkSafePath(clean); err != nil {
+		return "", err
 	}
 	info, err := os.Stat(clean)
 	if err != nil {
@@ -279,6 +287,14 @@ func CopyFile(src, dst string) error {
 		return err
 	}
 	defer in.Close()
+
+	// Opening dst with O_TRUNC when it is the same file as src would empty the
+	// source before the copy reads it, so a same-folder export must be a no-op.
+	if inInfo, err := in.Stat(); err == nil {
+		if dstInfo, err := os.Stat(dst); err == nil && os.SameFile(inInfo, dstInfo) {
+			return nil
+		}
+	}
 
 	out, err := os.OpenFile(dst, os.O_WRONLY|os.O_CREATE|os.O_TRUNC, 0o666)
 	if err != nil {

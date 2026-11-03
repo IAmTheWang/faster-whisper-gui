@@ -5,6 +5,7 @@ package config
 import (
 	"os"
 	"path/filepath"
+	"strings"
 
 	"faster-whisper-gui/internal/settings"
 )
@@ -45,6 +46,14 @@ func Load(root string) (*Config, error) {
 			return nil, err
 		}
 		root = filepath.Dir(exe)
+		// `go run` compiles to a throwaway directory under %TEMP% (go-build...);
+		// using that as the root would put bin/, models/ and settings.json
+		// somewhere that changes every run. Fall back to the working directory.
+		if strings.Contains(strings.ToLower(root), "go-build") {
+			if wd, err := os.Getwd(); err == nil {
+				root = wd
+			}
+		}
 	}
 
 	cfg := &Config{
