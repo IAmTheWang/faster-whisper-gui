@@ -1,5 +1,6 @@
 import './styles.css'
 import { api } from './api'
+import { errMsg } from './dom'
 import { mountDirectoryBrowser } from './components/directoryBrowser'
 import { mountJobConfigPanel } from './components/jobConfigPanel'
 import { mountJobHistory } from './components/jobHistory'
@@ -45,17 +46,22 @@ async function checkHealth(): Promise<void> {
     }
   } catch (err) {
     healthBanner.hidden = false
-    healthBanner.textContent = `Cannot reach backend: ${err instanceof Error ? err.message : String(err)}`
+    healthBanner.textContent = `Cannot reach backend: ${errMsg(err)}`
   }
 }
 
 const jobHistory = mountJobHistory(historyColumn)
 mountDirectoryBrowser(browserColumn)
 const jobConfigPanel = mountJobConfigPanel(configColumn, () => jobHistory.refresh())
-mountProgressPanel(progressColumn, () => jobHistory.refresh())
+mountProgressPanel(
+  progressColumn,
+  () => jobHistory.refresh(),
+  () => jobHistory.refreshThrottled(),
+)
 mountSettingsPanel(settingsColumn, () => {
   checkHealth()
-  jobConfigPanel.refreshModels()
+  // loadModels reports its own failures inline; this just guards the call.
+  jobConfigPanel.refreshModels().catch((err) => console.error('refreshModels failed', err))
 })
 
 checkHealth()

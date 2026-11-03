@@ -1,12 +1,38 @@
 // escapeHtml guards template-string innerHTML interpolation of
-// filesystem-derived strings (filenames, paths). Windows filenames can't
+// filesystem-derived strings (filenames, paths), including inside quoted
+// attribute values — hence the quote escapes. Windows filenames can't
 // actually contain '<' or '>', so this isn't defending against a realistic
 // XSS payload here — it's cheap insurance against '&' and friends breaking
 // entity parsing, and against relying on that platform detail at all.
 export function escapeHtml(value: string): string {
-  const div = document.createElement('div')
-  div.textContent = value
-  return div.innerHTML
+  return value
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;')
+    .replace(/'/g, '&#39;')
+}
+
+// errMsg turns anything thrown (an Error from api.ts, or a stray string)
+// into display text.
+export function errMsg(err: unknown): string {
+  return err instanceof Error ? err.message : String(err)
+}
+
+// makeActivatable makes a non-button element (a clickable <li> row) behave
+// like a button for keyboard and assistive-tech users: focusable, announced
+// as a button, and triggered by Enter/Space as well as click.
+export function makeActivatable(el: HTMLElement, onActivate: () => void): void {
+  el.setAttribute('role', 'button')
+  el.tabIndex = 0
+  el.addEventListener('click', onActivate)
+  el.addEventListener('keydown', (e) => {
+    if (e.target !== el) return
+    if (e.key === 'Enter' || e.key === ' ') {
+      e.preventDefault()
+      onActivate()
+    }
+  })
 }
 
 // basenameOf extracts the filename from a Windows or forward-slash path, for

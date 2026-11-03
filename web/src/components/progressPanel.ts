@@ -1,14 +1,11 @@
-import { api, subscribeJobEvents, type Entry, type JobStatus } from '../api'
-import { escapeHtml } from '../dom'
+import { api, isTerminalStatus, jobStatusLabels, subscribeJobEvents, type JobStatus } from '../api'
+import { basenameOf, errMsg } from '../dom'
 import { activeTabId, openTabs } from '../state'
+import { mountDirPicker } from './dirPicker'
 
-const stageLabels: Record<JobStatus, string> = {
-  queued: 'Queued',
-  extracting_audio: 'Extracting audio',
-  transcribing: 'Transcribing',
-  done: 'Done',
-  failed: 'Failed',
-  canceled: 'Canceled',
+interface SaveStatus {
+  text: string
+  kind: 'success' | 'error'
 }
 
 interface TabState {
@@ -17,20 +14,28 @@ interface TabState {
   message: string
   srtPath?: string
   error?: string
+  // Kept per tab (not in the DOM) so renderActive() can redraw on every
+  // progress event or tab switch without losing them.
+  saveStatus?: SaveStatus
+  cancelError?: string
   unsubscribe: () => void
 }
 
 // mountProgressPanel keeps one TabState per open Progress tab, independent
 // of which tab is frontmost — this is what lets a backgrounded job keep
 // progressing (SSE stays connected) while another tab is being viewed.
-export function mountProgressPanel(root: HTMLElement, onJobFinished: () => void): void {
+export function mountProgressPanel(
+  root: HTMLElement,
+  onJobFinished: () => void,
+  onJobProgress: () => void = () => {},
+): void {
   root.innerHTML = `
     <div class="panel">
       <h2>Progress</h2>
-      <div class="progress-tabs"></div>
+      <div class="progress-tabs" role="tablist" aria-label="Jobs"></div>
       <div class="progress-empty">No job started yet</div>
-      <div class="progress-active" hidden>
-        <div class="progress-bar"><div class="progress-bar-fill"></div></div>
+      <div class="progress-active" role="tabpanel" hidden>
+        <div class="progress-bar" role="progressbar" aria-label="Job progress" aria-valuemin="0" aria-valuemax="100" aria-valuenow="0"><div class="progress-bar-fill"></div></div>
         <div class="progress-stage"></div>
         <div class="progress-message"></div>
         <button type="button" class="btn-secondary cancel-btn">Cancel</button>
@@ -39,28 +44,17 @@ export function mountProgressPanel(root: HTMLElement, onJobFinished: () => void)
           <button type="button" class="btn-secondary save-btn">Save</button>
           <button type="button" class="btn-secondary save-all-btn">Save All Completed</button>
         </div>
-        <div class="save-status"></div>
+        <div class="save-status" aria-live="polite"></div>
       </div>
-      <div class="settings-picker" hidden>
-        <div class="browser-toolbar">
-          <select class="drive-select"></select>
-        </div>
-        <div class="breadcrumb">
-          <button type="button" class="btn-link picker-up" hidden>.. Up</button>
-          <span class="current-path"></span>
-        </div>
-        <ul class="entry-list picker-entry-list"></ul>
-        <div class="settings-picker-actions">
-          <button type="button" class="btn-primary picker-select-dir">Select This Directory</button>
-          <button type="button" class="btn-link picker-cancel">Cancel</button>
-        </div>
-      </div>
+      <div class="picker-mount"></div>
     </div>
   `
 
   const tabStrip = root.querySelector<HTMLDivElement>('.progress-tabs')!
   const empty = root.querySelector<HTMLDivElement>('.progress-empty')!
   const active = root.querySelector<HTMLDivElement>('.progress-active')!
+  const panelId = 'progress-panel-active'
+  active.id = panelId
   const fill = root.querySelector<HTMLDivElement>('.progress-bar-fill')!
   const stageEl = root.querySelector<HTMLDivElement>('.progress-stage')!
   const messageEl = root.querySelector<HTMLDivElement>('.progress-message')!
@@ -70,44 +64,74 @@ export function mountProgressPanel(root: HTMLElement, onJobFinished: () => void)
   const saveAllBtn = root.querySelector<HTMLButtonElement>('.save-all-btn')!
   const saveStatusEl = root.querySelector<HTMLDivElement>('.save-status')!
 
-  const picker = root.querySelector<HTMLDivElement>('.settings-picker')!
-  const driveSelect = picker.querySelector<HTMLSelectElement>('.drive-select')!
-  const pickerUpBtn = picker.querySelector<HTMLButtonElement>('.picker-up')!
-  const currentPathEl = picker.querySelector<HTMLSpanElement>('.current-path')!
-  const pickerEntryList = picker.querySelector<HTMLUListElement>('.picker-entry-list')!
-  const selectDirBtn = picker.querySelector<HTMLButtonElement>('.picker-select-dir')!
-  const cancelPickerBtn = picker.querySelector<HTMLButtonElement>('.picker-cancel')!
+  const picker = mountDirPicker(root.querySelector<HTMLDivElement>('.picker-mount')!)
+  const progressBar = root.querySelector<HTMLDivElement>('.progress-bar')!
 
   const jobStates = new Map<string, TabState>()
-  let pickerMode: 'single' | 'all' | null = null
-  let pickerPath = ''
+  // True while an export is running, so Save buttons can't double-fire.
+  let exporting = false
 
   function updateSaveAllButton(): void {
-    saveAllBtn.disabled = ![...jobStates.values()].some((s) => s.status === 'done')
+    saveAllBtn.disabled = exporting || ![...jobStates.values()].some((s) => s.status === 'done')
   }
 
   function renderTabs(): void {
     const tabs = openTabs.get()
     const activeId = activeTabId.get()
+    // The strip is rebuilt wholesale; keep keyboard focus on the same tab.
+    const focused = document.activeElement as HTMLElement | null
+    const focusedTabId =
+      focused && focused.classList.contains('progress-tab-label') && tabStrip.contains(focused)
+        ? focused.dataset.tabId
+        : undefined
+    let toFocus: HTMLElement | null = null
+    let activeLabel: HTMLElement | null = null
+
     tabStrip.innerHTML = ''
     for (const tab of tabs) {
-      const btn = document.createElement('button')
-      btn.type = 'button'
-      btn.className = tab.id === activeId ? 'progress-tab active' : 'progress-tab'
-      const label = document.createElement('span')
+      const isActive = tab.id === activeId
+      const wrap = document.createElement('div')
+      wrap.className = isActive ? 'progress-tab active' : 'progress-tab'
+      wrap.setAttribute('role', 'presentation')
+
+      const label = document.createElement('button')
+      label.type = 'button'
+      label.className = 'progress-tab-label'
+      label.setAttribute('role', 'tab')
+      label.setAttribute('aria-selected', String(isActive))
+      label.dataset.tabId = tab.id
+      label.id = `progress-tab-${tab.id}`
+      label.setAttribute('aria-controls', panelId)
       label.textContent = tab.mediaName
-      btn.appendChild(label)
-      const close = document.createElement('span')
-      close.className = 'progress-tab-close'
-      close.textContent = '×'
-      close.addEventListener('click', (e) => {
-        e.stopPropagation()
-        closeTab(tab.id)
+      label.title = `${tab.mediaName} (press Delete to close)`
+      label.addEventListener('click', () => activeTabId.set(tab.id))
+      // The × is mouse-only (aria-hidden, not focusable) so the tablist only
+      // contains tabs; keyboard users close a tab with Delete instead.
+      label.addEventListener('keydown', (e) => {
+        if (e.key === 'Delete') closeTab(tab.id)
       })
-      btn.appendChild(close)
-      btn.addEventListener('click', () => activeTabId.set(tab.id))
-      tabStrip.appendChild(btn)
+      wrap.appendChild(label)
+      if (isActive) activeLabel = label
+
+      const close = document.createElement('button')
+      close.type = 'button'
+      close.className = 'progress-tab-close'
+      close.setAttribute('aria-hidden', 'true')
+      close.tabIndex = -1
+      close.title = `Close ${tab.mediaName}`
+      close.textContent = '×'
+      close.addEventListener('click', () => closeTab(tab.id))
+      wrap.appendChild(close)
+
+      tabStrip.appendChild(wrap)
+      if (tab.id === focusedTabId) toFocus = label
     }
+    // If the focused tab was just closed, move focus to the now-active tab
+    // instead of letting it fall back to <body>.
+    const focusLost = focusedTabId !== undefined && !toFocus
+    ;(toFocus ?? (focusLost ? activeLabel : null))?.focus()
+    if (activeLabel) active.setAttribute('aria-labelledby', (activeLabel as HTMLElement).id)
+    else active.removeAttribute('aria-labelledby')
   }
 
   function renderActive(): void {
@@ -121,15 +145,17 @@ export function mountProgressPanel(root: HTMLElement, onJobFinished: () => void)
 
     empty.hidden = true
     active.hidden = false
-    saveStatusEl.textContent = ''
-    saveStatusEl.className = 'save-status'
-    fill.style.width = `${Math.min(100, Math.max(0, state.percent))}%`
-    stageEl.textContent = stageLabels[state.status] ?? state.status
+    const pct = Math.min(100, Math.max(0, state.percent))
+    fill.style.width = `${pct}%`
+    progressBar.setAttribute('aria-valuenow', String(Math.round(pct)))
+    stageEl.textContent = jobStatusLabels[state.status] ?? state.status
     messageEl.textContent = state.message
 
-    const terminal = state.status === 'done' || state.status === 'failed' || state.status === 'canceled'
+    const terminal = isTerminalStatus(state.status)
     cancelBtn.hidden = terminal
-    saveBtn.disabled = state.status !== 'done'
+    saveBtn.disabled = exporting || state.status !== 'done'
+    saveStatusEl.textContent = state.saveStatus?.text ?? ''
+    saveStatusEl.className = state.saveStatus ? `save-status ${state.saveStatus.kind}` : 'save-status'
 
     if (state.status === 'done') {
       resultEl.textContent = `Subtitle saved to: ${state.srtPath}`
@@ -140,6 +166,9 @@ export function mountProgressPanel(root: HTMLElement, onJobFinished: () => void)
     } else if (state.status === 'canceled') {
       resultEl.textContent = 'Job canceled'
       resultEl.className = 'progress-result'
+    } else if (state.cancelError) {
+      resultEl.textContent = state.cancelError
+      resultEl.className = 'progress-result error'
     } else {
       resultEl.textContent = ''
       resultEl.className = 'progress-result'
@@ -169,7 +198,7 @@ export function mountProgressPanel(root: HTMLElement, onJobFinished: () => void)
       // Show why the tab is empty; closing and reopening the tab retries.
       if (jobStates.get(id) === placeholder) {
         placeholder.status = 'failed'
-        placeholder.error = `Could not load job: ${err instanceof Error ? err.message : String(err)}`
+        placeholder.error = `Could not load job: ${errMsg(err)}`
         if (activeTabId.get() === id) renderActive()
       }
       return
@@ -190,6 +219,7 @@ export function mountProgressPanel(root: HTMLElement, onJobFinished: () => void)
         state.percent = data.percent
         state.message = data.message ?? ''
         if (activeTabId.get() === id) renderActive()
+        onJobProgress()
       },
       onDone: (data) => {
         state.status = 'done'
@@ -220,7 +250,7 @@ export function mountProgressPanel(root: HTMLElement, onJobFinished: () => void)
             state.percent = j.percent
             state.srtPath = j.srtPath
             state.error = j.error
-            if (!['done', 'failed', 'canceled'].includes(j.status)) {
+            if (!isTerminalStatus(j.status)) {
               state.status = 'failed'
               state.error = 'Lost connection to the server while the job was running.'
             }
@@ -264,100 +294,102 @@ export function mountProgressPanel(root: HTMLElement, onJobFinished: () => void)
   cancelBtn.addEventListener('click', async () => {
     const id = activeTabId.get()
     if (!id) return
+    const state = jobStates.get(id)
+    if (state) state.cancelError = undefined
     cancelBtn.disabled = true
     try {
       await api.cancelJob(id)
     } catch (err) {
-      resultEl.textContent = err instanceof Error ? err.message : String(err)
-      resultEl.className = 'progress-result error'
+      if (state) state.cancelError = errMsg(err)
+      if (activeTabId.get() === id) renderActive()
     } finally {
       cancelBtn.disabled = false
     }
   })
 
-  async function openPicker(mode: 'single' | 'all'): Promise<void> {
-    pickerMode = mode
-    picker.hidden = false
-    saveStatusEl.textContent = ''
-    const drives = await api.drives()
-    driveSelect.innerHTML = drives
-      .map((d) => `<option value="${escapeHtml(d.name)}">${escapeHtml(d.name)} ${escapeHtml(d.label)}</option>`)
-      .join('')
-    if (drives.length > 0) await navigatePicker(drives[0].name)
+  function setSaveStatus(id: string, status: SaveStatus): void {
+    const state = jobStates.get(id)
+    if (state) state.saveStatus = status
+    if (activeTabId.get() === id) renderActive()
   }
 
-  async function navigatePicker(path: string): Promise<void> {
+  function setExporting(value: boolean): void {
+    exporting = value
+    updateSaveAllButton()
+    const id = activeTabId.get()
+    const state = id ? jobStates.get(id) : undefined
+    saveBtn.disabled = exporting || state?.status !== 'done'
+  }
+
+  async function exportOne(jobId: string, destDir: string): Promise<void> {
+    setExporting(true)
     try {
-      const listing = await api.browse(path, 'dir')
-      pickerPath = listing.path
-      currentPathEl.textContent = listing.path
-      pickerUpBtn.hidden = !listing.parent
-      pickerUpBtn.onclick = () => navigatePicker(listing.parent!)
-      renderPickerEntries(listing.entries)
+      const res = await api.exportJob(jobId, destDir)
+      setSaveStatus(jobId, { text: `Saved to: ${res.destPath}`, kind: 'success' })
     } catch (err) {
-      pickerEntryList.innerHTML = `<li class="entry-error">${escapeHtml(err instanceof Error ? err.message : String(err))}</li>`
+      setSaveStatus(jobId, { text: errMsg(err), kind: 'error' })
+    } finally {
+      setExporting(false)
     }
   }
 
-  function renderPickerEntries(entries: Entry[]): void {
-    pickerEntryList.innerHTML = ''
-    if (entries.length === 0) {
-      pickerEntryList.innerHTML = '<li class="entry-empty">(empty)</li>'
-      return
-    }
-    for (const entry of entries) {
-      const li = document.createElement('li')
-      li.className = `entry entry-${entry.type}`
-      li.textContent = `📁 ${entry.name}`
-      li.addEventListener('click', () => navigatePicker(entry.path))
-      pickerEntryList.appendChild(li)
-    }
-  }
-
-  function closePicker(): void {
-    picker.hidden = true
-    pickerMode = null
-  }
-
-  driveSelect.addEventListener('change', () => navigatePicker(driveSelect.value))
-  cancelPickerBtn.addEventListener('click', closePicker)
-  saveBtn.addEventListener('click', () => openPicker('single'))
-  saveAllBtn.addEventListener('click', () => openPicker('all'))
-
-  selectDirBtn.addEventListener('click', async () => {
-    const destDir = pickerPath
-    const mode = pickerMode
-    closePicker()
-    if (!destDir || !mode) return
-
-    if (mode === 'single') {
-      const id = activeTabId.get()
-      if (!id) return
-      try {
-        const res = await api.exportJob(id, destDir)
-        saveStatusEl.textContent = `Saved to: ${res.destPath}`
-        saveStatusEl.className = 'save-status success'
-      } catch (err) {
-        saveStatusEl.textContent = err instanceof Error ? err.message : String(err)
-        saveStatusEl.className = 'save-status error'
-      }
-      return
-    }
-
+  // Exports every completed tab one at a time. Two jobs whose .srt files share
+  // a basename would overwrite each other in one folder, so the later one is
+  // skipped and reported instead. The summary is shown on statusTargetId (the
+  // tab that was frontmost when the picker was opened).
+  async function exportAll(statusTargetId: string, destDir: string): Promise<void> {
     const doneTabs = openTabs.get().filter((t) => jobStates.get(t.id)?.status === 'done')
-    const results = await Promise.allSettled(doneTabs.map((t) => api.exportJob(t.id, destDir)))
-    const failures: string[] = []
+    setExporting(true)
+    const problems: string[] = []
+    const claimed = new Map<string, string>() // lower-cased basename -> media name that took it
     let succeeded = 0
-    results.forEach((result, i) => {
-      if (result.status === 'fulfilled') {
-        succeeded++
-      } else {
-        const message = result.reason instanceof Error ? result.reason.message : String(result.reason)
-        failures.push(`${doneTabs[i].mediaName}: ${message}`)
+    try {
+      for (const tab of doneTabs) {
+        const srtPath = jobStates.get(tab.id)?.srtPath
+        const base = srtPath ? basenameOf(srtPath).toLowerCase() : ''
+        const owner = base ? claimed.get(base) : undefined
+        if (owner !== undefined) {
+          problems.push(`${tab.mediaName}: skipped, "${basenameOf(srtPath!)}" would overwrite the copy from ${owner}`)
+          continue
+        }
+        try {
+          await api.exportJob(tab.id, destDir)
+          if (base) claimed.set(base, tab.mediaName)
+          succeeded++
+        } catch (err) {
+          problems.push(`${tab.mediaName}: ${errMsg(err)}`)
+        }
       }
+    } finally {
+      setExporting(false)
+    }
+    setSaveStatus(statusTargetId, {
+      text:
+        problems.length === 0
+          ? `Saved ${succeeded}/${doneTabs.length}`
+          : `Saved ${succeeded}/${doneTabs.length} — ${problems.join('; ')}`,
+      kind: problems.length === 0 ? 'success' : 'error',
     })
-    saveStatusEl.textContent =
-      failures.length === 0 ? `Saved ${succeeded}/${doneTabs.length}` : `Saved ${succeeded}/${doneTabs.length} — ${failures.join('; ')}`
-    saveStatusEl.className = failures.length === 0 ? 'save-status success' : 'save-status error'
-  })
+  }
+
+  // The job (or status-target tab) is captured here, when the picker is
+  // opened — not read from activeTabId at confirm time, when the user may
+  // have switched tabs.
+  function openSavePicker(mode: 'single' | 'all'): void {
+    const targetId = activeTabId.get()
+    if (!targetId) return
+    const state = jobStates.get(targetId)
+    if (state) state.saveStatus = undefined
+    renderActive()
+    void picker.open({
+      kind: 'dir',
+      onSelect: (destDir) => {
+        if (mode === 'single') void exportOne(targetId, destDir)
+        else void exportAll(targetId, destDir)
+      },
+    })
+  }
+
+  saveBtn.addEventListener('click', () => openSavePicker('single'))
+  saveAllBtn.addEventListener('click', () => openSavePicker('all'))
 }

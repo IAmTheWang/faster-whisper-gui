@@ -1,4 +1,5 @@
-import { api, type Language, type Model, type OutputMode } from '../api'
+import { api, type OutputMode } from '../api'
+import { errMsg } from '../dom'
 import { activeTabId, openTabs, selectedMedia, type TabInfo } from '../state'
 
 export interface JobConfigPanelHandle {
@@ -29,21 +30,21 @@ export function mountJobConfigPanel(root: HTMLElement, onJobCreated: () => void)
         <label class="radio-label">
           <input type="radio" name="outputMode" value="custom" /> Custom directory
         </label>
-        <input type="text" class="output-dir" placeholder="E:\\subtitles" disabled />
+        <input type="text" id="output-dir" class="output-dir" aria-label="Custom output directory" placeholder="E:\\subtitles" disabled />
       </div>
       <details class="advanced">
         <summary>Advanced Options</summary>
         <div class="field">
           <label for="max-len">Max characters per subtitle line (leave blank for default)</label>
-          <input type="number" id="max-len" class="max-len" min="1" />
+          <input type="number" id="max-len" class="max-len" min="0" max="1000" step="1" />
         </div>
         <div class="field">
           <label for="max-context">Context carried between segments (0 = disabled, recommended; -1 = whisper default/unlimited)</label>
-          <input type="number" id="max-context" class="max-context" value="0" />
+          <input type="number" id="max-context" class="max-context" value="0" min="-1" max="4096" step="1" />
         </div>
       </details>
       <button type="button" class="btn-primary start-btn">Start Transcription</button>
-      <div class="form-error"></div>
+      <div class="form-error" role="alert"></div>
     </div>
   `
 
@@ -78,18 +79,64 @@ export function mountJobConfigPanel(root: HTMLElement, onJobCreated: () => void)
     }
   })
 
+  // Text of the last "no models" notice, so a later successful reload only
+  // clears that notice and not an unrelated submit error.
+  let modelsNotice = ''
+
+  function setOptions(select: HTMLSelectElement, items: { value: string; label: string }[]): void {
+    select.replaceChildren(
+      ...items.map((item) => {
+        const opt = document.createElement('option')
+        opt.value = item.value
+        opt.textContent = item.label
+        return opt
+      }),
+    )
+  }
+
   async function loadModels(): Promise<void> {
-    const models = await api.models()
-    modelSelect.innerHTML = models.map((m: Model) => `<option value="${m.id}">${m.label}</option>`).join('')
-    formError.textContent =
-      models.length === 0 ? 'No model files detected — put a ggml-*.bin file in the models directory and refresh' : ''
+    try {
+      const models = await api.models()
+      const previous = modelSelect.value
+      setOptions(
+        modelSelect,
+        models.map((m) => ({ value: m.id, label: m.label })),
+      )
+      // Keep the user's choice across a rebuild (e.g. after a Settings save).
+      if (previous && models.some((m) => m.id === previous)) modelSelect.value = previous
+      if (models.length === 0) {
+        modelsNotice = 'No model files detected — put a ggml-*.bin file in the models directory and refresh'
+        formError.textContent = modelsNotice
+      } else if (modelsNotice && formError.textContent === modelsNotice) {
+        modelsNotice = ''
+        formError.textContent = ''
+      }
+    } catch (err) {
+      modelsNotice = `Could not load models: ${errMsg(err)}`
+      formError.textContent = modelsNotice
+    }
   }
 
   async function loadLanguages(): Promise<void> {
-    const languages = await api.languages()
-    languageSelect.innerHTML = languages
-      .map((l: Language) => `<option value="${l.code}">${l.label}</option>`)
-      .join('')
+    try {
+      const languages = await api.languages()
+      setOptions(
+        languageSelect,
+        languages.map((l) => ({ value: l.code, label: l.label })),
+      )
+    } catch (err) {
+      formError.textContent = `Could not load languages: ${errMsg(err)}`
+    }
+  }
+
+  // parseBoundedInt returns undefined for blank input (caller decides the
+  // default), null if invalid, else the integer.
+  function parseBoundedInt(raw: string, min: number, max: number): number | null | undefined {
+    const trimmed = raw.trim()
+    if (trimmed === '') return undefined
+    const n = Number(trimmed)
+    if (!Number.isInteger(n) || n < min || n > max) return null
+    return n
   }
 
   startBtn.addEventListener('click', async () => {
@@ -106,39 +153,45 @@ export function mountJobConfigPanel(root: HTMLElement, onJobCreated: () => void)
     }
 
     const outputMode = getOutputMode()
-    const maxLenValue = maxLenInput.value.trim()
     const language = languageSelect.value || 'auto'
     const outputDir = outputMode === 'custom' ? outputDirInput.value.trim() : undefined
-    const maxLen = maxLenValue ? Number(maxLenValue) : undefined
-    const maxContextValue = maxContextInput.value.trim()
-    const maxContext = maxContextValue === '' ? 0 : Number(maxContextValue)
+    const maxLen = parseBoundedInt(maxLenInput.value, 0, 1000)
+    if (maxLen === null) {
+      formError.textContent = 'Max characters per line must be a whole number between 0 and 1000 (or blank)'
+      return
+    }
+    const maxContextParsed = parseBoundedInt(maxContextInput.value, -1, 4096)
+    if (maxContextParsed === null) {
+      formError.textContent = 'Context must be a whole number between -1 and 4096'
+      return
+    }
+    const maxContext = maxContextParsed ?? 0
+    const modelId = modelSelect.value
 
     startBtn.disabled = true
     try {
-      const results = await Promise.allSettled(
-        files.map((file) =>
-          api.createJob({
+      // One request at a time, in selection order, so jobs queue in the order
+      // the user picked them.
+      const newTabs: TabInfo[] = []
+      const createdPaths = new Set<string>()
+      const errors: string[] = []
+      for (const file of files) {
+        try {
+          const res = await api.createJob({
             mediaPath: file.path,
-            modelId: modelSelect.value,
+            modelId,
             language,
             outputMode,
             outputDir,
             maxLen,
             maxContext,
-          }),
-        ),
-      )
-
-      const newTabs: TabInfo[] = []
-      const errors: string[] = []
-      results.forEach((result, i) => {
-        if (result.status === 'fulfilled') {
-          newTabs.push({ id: result.value.jobId, mediaName: files[i].name })
-        } else {
-          const message = result.reason instanceof Error ? result.reason.message : String(result.reason)
-          errors.push(`${files[i].name}: ${message}`)
+          })
+          newTabs.push({ id: res.jobId, mediaName: file.name })
+          createdPaths.add(file.path)
+        } catch (err) {
+          errors.push(`${file.name}: ${errMsg(err)}`)
         }
-      })
+      }
 
       if (newTabs.length > 0) {
         openTabs.set([...openTabs.get(), ...newTabs])
@@ -146,7 +199,10 @@ export function mountJobConfigPanel(root: HTMLElement, onJobCreated: () => void)
         onJobCreated()
       }
       formError.textContent = errors.join('; ')
-      selectedMedia.set([])
+      // Only drop files that actually became jobs; failures stay checked so
+      // the user can fix the problem and retry. (Re-read the store: the user
+      // may have changed the selection while requests were in flight.)
+      selectedMedia.set(selectedMedia.get().filter((f) => !createdPaths.has(f.path)))
     } finally {
       startBtn.disabled = false
     }

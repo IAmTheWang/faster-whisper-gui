@@ -70,6 +70,19 @@ export type JobStatus =
   | 'failed'
   | 'canceled'
 
+export const jobStatusLabels: Record<JobStatus, string> = {
+  queued: 'Queued',
+  extracting_audio: 'Extracting audio',
+  transcribing: 'Transcribing',
+  done: 'Done',
+  failed: 'Failed',
+  canceled: 'Canceled',
+}
+
+export function isTerminalStatus(status: JobStatus): boolean {
+  return status === 'done' || status === 'failed' || status === 'canceled'
+}
+
 export interface JobRequestView {
   mediaPath: string
   modelId: string
@@ -92,15 +105,8 @@ export interface Job {
   updatedAt: string
 }
 
-export interface CreateJobRequest {
-  mediaPath: string
-  modelId: string
-  language: string
-  outputMode: OutputMode
-  outputDir?: string
-  maxLen?: number
-  maxContext?: number
-}
+// A job request is sent and echoed back field-for-field identical.
+export type CreateJobRequest = JobRequestView
 
 export interface CreateJobResponse {
   jobId: string

@@ -1,5 +1,5 @@
 import { api, type Entry } from '../api'
-import { dirnameOf, escapeHtml, stripSurroundingQuotes } from '../dom'
+import { dirnameOf, errMsg, escapeHtml, makeActivatable, stripSurroundingQuotes } from '../dom'
 import { selectedMedia } from '../state'
 
 type SortKey = 'name' | 'type' | 'modTime' | 'createdTime' | 'size'
@@ -61,7 +61,7 @@ export function mountDirectoryBrowser(root: HTMLElement): void {
     <div class="panel">
       <h2>Select Media</h2>
       <div class="browser-toolbar">
-        <input type="text" class="drive-select"
+        <input type="text" class="drive-select" aria-label="Drive or folder path"
                placeholder="Drive letter or paste a full path" autocomplete="off" spellcheck="false" />
       </div>
       <div class="selection-bar">
@@ -143,9 +143,16 @@ export function mountDirectoryBrowser(root: HTMLElement): void {
 
   clearSelectionBtn.addEventListener('click', () => selectedMedia.set([]))
 
+  function showListError(message: string): void {
+    entryList.innerHTML = `<li class="entry-error" role="alert">${escapeHtml(message)}</li>`
+  }
+
   async function loadDrives(): Promise<void> {
     const drives = await api.drives()
-    if (drives.length === 0) return
+    if (drives.length === 0) {
+      showListError('No drives found')
+      return
+    }
 
     const settings = await api.settings().catch(() => null)
     const defaultDir = settings?.defaultVideoDir
@@ -154,9 +161,15 @@ export function mountDirectoryBrowser(root: HTMLElement): void {
     await navigate(defaultDir || drives[0].name)
   }
 
+  // Monotonic counter: a slower, earlier response must never overwrite a
+  // newer navigation's listing.
+  let navSeq = 0
+
   async function navigate(path: string): Promise<Error | null> {
+    const mySeq = ++navSeq
     try {
       const listing = await api.browse(path)
+      if (mySeq !== navSeq) return null
       currentPath = listing.path
       driveInput.value = listing.path
       refreshBtn.disabled = false
@@ -164,8 +177,9 @@ export function mountDirectoryBrowser(root: HTMLElement): void {
       renderEntries(listing.entries)
       return null
     } catch (err) {
+      if (mySeq !== navSeq) return null
       const error = err instanceof Error ? err : new Error(String(err))
-      entryList.innerHTML = `<li class="entry-error">${escapeHtml(error.message)}</li>`
+      showListError(error.message)
       driveInput.value = currentPath
       return error
     }
@@ -222,6 +236,7 @@ export function mountDirectoryBrowser(root: HTMLElement): void {
         const checkbox = document.createElement('input')
         checkbox.type = 'checkbox'
         checkbox.className = 'media-checkbox'
+        checkbox.setAttribute('aria-label', `Select ${entry.name}`)
         checkbox.checked = selectedPaths.has(entry.path)
         checkbox.addEventListener('click', (e) => e.stopPropagation())
         checkbox.addEventListener('change', () => toggleSelection(entry))
@@ -234,13 +249,20 @@ export function mountDirectoryBrowser(root: HTMLElement): void {
       label.textContent = `${icon} ${entry.name}`
       li.appendChild(label)
 
-      li.addEventListener('click', () => {
+      const activate = (): void => {
         if (entry.type === 'dir') {
           navigate(entry.path)
         } else {
           toggleSelection(entry)
         }
-      })
+      }
+      if (isMedia) {
+        // The checkbox is the focusable control (native semantics); the row
+        // click is a mouse convenience on top of it.
+        li.addEventListener('click', activate)
+      } else {
+        makeActivatable(li, activate)
+      }
       entryList.appendChild(li)
     }
   }
@@ -297,5 +319,5 @@ export function mountDirectoryBrowser(root: HTMLElement): void {
   })
 
   updateSortControlsUI()
-  loadDrives()
+  loadDrives().catch((err) => showListError(`Could not load drives: ${errMsg(err)}`))
 }
