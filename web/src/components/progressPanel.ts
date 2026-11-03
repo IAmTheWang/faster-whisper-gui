@@ -161,9 +161,23 @@ export function mountProgressPanel(root: HTMLElement, onJobFinished: () => void)
     // no-op, and so closing the tab mid-fetch can be detected on resume.
     jobStates.set(id, { status: 'queued', percent: 0, message: '', unsubscribe: () => {} })
 
-    const job = await api.job(id)
+    const placeholder = jobStates.get(id)!
+    let job: Awaited<ReturnType<typeof api.job>>
+    try {
+      job = await api.job(id)
+    } catch (err) {
+      // Show why the tab is empty; closing and reopening the tab retries.
+      if (jobStates.get(id) === placeholder) {
+        placeholder.status = 'failed'
+        placeholder.error = `Could not load job: ${err instanceof Error ? err.message : String(err)}`
+        if (activeTabId.get() === id) renderActive()
+      }
+      return
+    }
+    // Identity, not just presence: the tab may have been closed and reopened
+    // while the fetch was in flight, and the reopened tab owns its own fetch.
     const state = jobStates.get(id)
-    if (!state) return // tab was closed before this fetch resolved
+    if (!state || state !== placeholder) return
 
     state.status = job.status
     state.percent = job.percent
@@ -195,6 +209,31 @@ export function mountProgressPanel(root: HTMLElement, onJobFinished: () => void)
         state.status = 'canceled'
         if (activeTabId.get() === id) renderActive()
         onJobFinished()
+      },
+      onDisconnect: () => {
+        // Resync from the server; if the job is gone (server restarted) or
+        // still unfinished with no stream, say so instead of hanging.
+        api
+          .job(id)
+          .then((j) => {
+            state.status = j.status
+            state.percent = j.percent
+            state.srtPath = j.srtPath
+            state.error = j.error
+            if (!['done', 'failed', 'canceled'].includes(j.status)) {
+              state.status = 'failed'
+              state.error = 'Lost connection to the server while the job was running.'
+            }
+          })
+          .catch(() => {
+            state.status = 'failed'
+            state.error = 'The server no longer knows this job (it may have been restarted).'
+          })
+          .finally(() => {
+            if (activeTabId.get() === id) renderActive()
+            updateSaveAllButton()
+            onJobFinished()
+          })
       },
     })
 

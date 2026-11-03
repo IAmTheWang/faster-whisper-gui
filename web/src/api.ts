@@ -127,7 +127,7 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
 
 export const api = {
   health: () => request<HealthResponse>('/api/health'),
-  drives: () => request<Drive[]>('/api/drives'),
+  drives: () => request<Drive[] | null>('/api/drives').then((d) => d ?? []),
   browse: (path: string, kind: BrowseKind = 'media') =>
     request<Listing>(`/api/browse?path=${encodeURIComponent(path)}&kind=${kind}`),
   models: () => request<Model[]>('/api/models'),
@@ -191,6 +191,10 @@ export interface JobEventHandlers {
   onDone?: (data: DoneEventData) => void
   onError?: (data: ErrorEventData) => void
   onCanceled?: () => void
+  // The stream closed for good without a terminal event (e.g. the server
+  // restarted and no longer knows the job — /events then 404s and
+  // EventSource does not retry).
+  onDisconnect?: () => void
 }
 
 // subscribeJobEvents wraps EventSource for one job's SSE stream. The
@@ -214,7 +218,10 @@ export function subscribeJobEvents(jobId: string, handlers: JobEventHandlers): (
     if (typeof data === 'string') {
       handlers.onError?.(JSON.parse(data))
       source.close()
+    } else if (source.readyState === EventSource.CLOSED) {
+      handlers.onDisconnect?.()
     }
+    // else: a transient drop; EventSource is reconnecting by itself.
   })
   source.addEventListener('canceled', () => {
     handlers.onCanceled?.()

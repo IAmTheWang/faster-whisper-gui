@@ -102,7 +102,7 @@ func (s *Server) handleCreateJob(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	writeJSON(w, http.StatusAccepted, createJobResponse{JobID: j.ID, Status: string(j.Status)})
+	writeJSON(w, http.StatusAccepted, createJobResponse{JobID: j.ID, Status: string(job.StatusQueued)})
 }
 
 func (s *Server) handleListJobs(w http.ResponseWriter, r *http.Request) {

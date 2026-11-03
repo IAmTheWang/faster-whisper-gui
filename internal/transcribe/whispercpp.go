@@ -3,6 +3,7 @@ package transcribe
 import (
 	"context"
 	"fmt"
+	"io"
 	"os/exec"
 	"regexp"
 	"strconv"
@@ -146,6 +147,7 @@ func (e *WhisperCppEngine) Transcribe(ctx context.Context, opts Options, onProgr
 				updates <- progressUpdate{percent: pct, message: text}
 			}
 		}
+		_, _ = io.Copy(io.Discard, stdoutPipe)
 	}()
 
 	go func() {
@@ -161,6 +163,9 @@ func (e *WhisperCppEngine) Transcribe(ctx context.Context, opts Options, onProgr
 				updates <- progressUpdate{percent: pct}
 			}
 		}
+		// A scanner error (e.g. a line over the buffer limit) stops Scan
+		// early; keep draining so whisper-cli never blocks on a full pipe.
+		_, _ = io.Copy(io.Discard, stderrPipe)
 	}()
 
 	go func() {
