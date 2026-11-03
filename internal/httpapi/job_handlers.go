@@ -1,10 +1,12 @@
 package httpapi
 
 import (
+	"errors"
 	"fmt"
 	"net/http"
 	"path/filepath"
 	"regexp"
+	"strings"
 
 	"faster-whisper-gui/internal/fsbrowse"
 	"faster-whisper-gui/internal/job"
@@ -114,12 +116,24 @@ func (s *Server) handleCreateJob(w http.ResponseWriter, r *http.Request) {
 	}
 
 	srtPath := job.OutputPrefix(jobReq) + ".srt"
+	// Two unfinished jobs writing the same .srt would silently clobber each
+	// other; refuse the second one up front.
+	for _, other := range s.Store.List() {
+		if !other.Status.IsTerminal() && strings.EqualFold(job.OutputPrefix(other.Request)+".srt", srtPath) {
+			writeErrorMsg(w, http.StatusConflict, "another unfinished job is already writing "+srtPath)
+			return
+		}
+	}
 	if err := fsbrowse.EnsureWritable(srtPath); err != nil {
 		writeErrorMsg(w, http.StatusConflict, "target subtitle file is not writable (it may be open in a media player): "+err.Error())
 		return
 	}
 
 	j, err := s.Queue.Submit(jobReq)
+	if errors.Is(err, job.ErrQueueFull) {
+		writeErrorMsg(w, http.StatusTooManyRequests, "too many jobs are waiting; try again once some have finished")
+		return
+	}
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, err)
 		return

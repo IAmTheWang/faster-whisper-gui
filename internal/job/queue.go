@@ -4,6 +4,7 @@ import (
 	"context"
 	"crypto/rand"
 	"encoding/hex"
+	"errors"
 	"fmt"
 	"log/slog"
 	"os"
@@ -53,6 +54,12 @@ func NewQueue(store *Store, pipeline Pipeline, events EventPublisher) *Queue {
 	return q
 }
 
+// progressInterval throttles per-job progress updates.
+const progressInterval = 200 * time.Millisecond
+
+// ErrQueueFull is returned by Submit when too many jobs are already waiting.
+var ErrQueueFull = errors.New("job queue is full")
+
 // Submit creates a new job in Queued state and enqueues it for processing.
 // The caller is expected to have already validated req (media file exists,
 // output path is writable, model exists) — see httpapi's job handler.
@@ -75,8 +82,15 @@ func (q *Queue) Submit(req Request) (*Job, error) {
 		cancel:    cancel,
 	}
 	q.store.Add(j)
-	q.submit <- j
-	return j, nil
+	select {
+	case q.submit <- j:
+		return j, nil
+	default:
+		// Don't block the HTTP handler behind a full queue.
+		q.store.Remove(id)
+		cancel()
+		return nil, ErrQueueFull
+	}
 }
 
 // Cancel requests cancellation of a queued or running job. A job that has not
@@ -164,8 +178,15 @@ func (q *Queue) process(j *Job) {
 		MaxContext:    j.Request.MaxContext,
 		TotalDuration: duration,
 	}
+	// whisper-cli prints a line per segment, which can be many per second;
+	// forward at most one update per progressInterval (the final 100% comes
+	// from the Done transition below).
+	var lastSent time.Time
 	err = q.pipeline.Engine.Transcribe(ctx, opts, func(p transcribe.Progress) {
-		q.setStatus(j.ID, StatusTranscribing, p.Percent, p.Message)
+		if now := time.Now(); now.Sub(lastSent) >= progressInterval {
+			lastSent = now
+			q.setStatus(j.ID, StatusTranscribing, p.Percent, p.Message)
+		}
 	})
 	if err != nil {
 		q.finishWithError(j.ID, ctx, err)

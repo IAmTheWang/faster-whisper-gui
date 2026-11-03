@@ -79,11 +79,38 @@ func NewStore() *Store {
 	return &Store{byID: make(map[string]*Job)}
 }
 
+// maxHistory bounds the in-memory job history. Only finished jobs are ever
+// evicted (oldest first), so queued/running jobs are never lost.
+const maxHistory = 200
+
 func (s *Store) Add(j *Job) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	s.jobs = append([]*Job{j}, s.jobs...)
 	s.byID[j.ID] = j
+	for i := len(s.jobs) - 1; i >= 0 && len(s.jobs) > maxHistory; i-- {
+		if old := s.jobs[i]; old.Status.IsTerminal() {
+			delete(s.byID, old.ID)
+			s.jobs = append(s.jobs[:i], s.jobs[i+1:]...)
+		}
+	}
+}
+
+// Remove deletes a job outright (used when a just-added job could not be
+// enqueued).
+func (s *Store) Remove(id string) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if _, ok := s.byID[id]; !ok {
+		return
+	}
+	delete(s.byID, id)
+	for i, j := range s.jobs {
+		if j.ID == id {
+			s.jobs = append(s.jobs[:i], s.jobs[i+1:]...)
+			break
+		}
+	}
 }
 
 // Get returns a snapshot copy of the job (not the live pointer), so callers

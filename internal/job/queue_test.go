@@ -278,3 +278,36 @@ func TestQueueProbeFailureIsNotFatal(t *testing.T) {
 	j, _ := q.Submit(Request{MediaPath: `E:\v\1.mp4`, OutputMode: OutputSameAsSource})
 	waitForStatus(t, store, j.ID, StatusDone, 2*time.Second)
 }
+
+func TestQueueFullReturnsErrQueueFull(t *testing.T) {
+	store := NewStore()
+	block := make(chan struct{})
+	pipeline := Pipeline{
+		ExtractAudio: func(ctx context.Context, _, _ string) error {
+			select {
+			case <-block:
+			case <-ctx.Done():
+			}
+			return nil
+		},
+		ProbeDuration: fixedDuration(time.Second),
+		TmpDir:        t.TempDir(),
+		Engine:        &fakeEngine{},
+	}
+	q := NewQueue(store, pipeline, &fakePublisher{})
+	defer close(block)
+
+	var fullErr error
+	for i := 0; i < 200 && fullErr == nil; i++ {
+		_, fullErr = q.Submit(Request{MediaPath: `E:\v\x.mp4`, OutputMode: OutputSameAsSource})
+	}
+	if !errors.Is(fullErr, ErrQueueFull) {
+		t.Fatalf("Submit never reported ErrQueueFull, last err = %v", fullErr)
+	}
+	// The rejected job must not linger in the store as a phantom "queued" job.
+	for _, j := range store.List() {
+		if j.Status == StatusQueued && j.ctx.Err() != nil {
+			t.Fatal("rejected job left in store")
+		}
+	}
+}

@@ -1,6 +1,9 @@
 package job
 
-import "testing"
+import (
+	"fmt"
+	"testing"
+)
 
 func TestStoreAddGetList(t *testing.T) {
 	s := NewStore()
@@ -83,4 +86,35 @@ func TestStoreCancel(t *testing.T) {
 	if called {
 		t.Fatal("Cancel must not invoke the cancel func for an already-terminal job")
 	}
+}
+
+func TestStoreCapsHistoryButKeepsActiveJobs(t *testing.T) {
+	s := NewStore()
+	s.Add(&Job{ID: "active", Status: StatusTranscribing})
+	for i := 0; i < maxHistory+50; i++ {
+		s.Add(&Job{ID: fmt.Sprintf("done-%d", i), Status: StatusDone})
+	}
+	if got := len(s.List()); got != maxHistory {
+		t.Fatalf("history size = %d, want %d", got, maxHistory)
+	}
+	if _, ok := s.Get("active"); !ok {
+		t.Fatal("a non-terminal job must never be evicted")
+	}
+	if _, ok := s.Get("done-0"); ok {
+		t.Fatal("oldest finished job should have been evicted")
+	}
+	if _, ok := s.Get(fmt.Sprintf("done-%d", maxHistory+49)); !ok {
+		t.Fatal("newest job must be kept")
+	}
+}
+
+func TestStoreRemove(t *testing.T) {
+	s := NewStore()
+	s.Add(&Job{ID: "a"})
+	s.Add(&Job{ID: "b"})
+	s.Remove("a")
+	if _, ok := s.Get("a"); ok || len(s.List()) != 1 {
+		t.Fatal("Remove did not delete the job")
+	}
+	s.Remove("missing") // must not panic
 }
