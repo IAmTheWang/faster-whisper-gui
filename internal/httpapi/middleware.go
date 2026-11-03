@@ -11,7 +11,7 @@ import (
 // not just the API routes, so a panic anywhere still gets a clean 500
 // instead of taking the server down.
 func WithMiddleware(h http.Handler) http.Handler {
-	return recoverMiddleware(loggingMiddleware(h))
+	return recoverMiddleware(loggingMiddleware(hostGuard(h)))
 }
 
 func loggingMiddleware(next http.Handler) http.Handler {

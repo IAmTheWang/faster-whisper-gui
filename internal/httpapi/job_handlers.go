@@ -1,9 +1,10 @@
 package httpapi
 
 import (
-	"encoding/json"
+	"fmt"
 	"net/http"
 	"path/filepath"
+	"regexp"
 
 	"faster-whisper-gui/internal/fsbrowse"
 	"faster-whisper-gui/internal/job"
@@ -20,6 +21,23 @@ type createJobRequest struct {
 	MaxContext int    `json:"maxContext,omitempty"`
 }
 
+var languageCodeRE = regexp.MustCompile(`^(auto|[a-z]{2,3})$`)
+
+// validateJobOptions bounds the free-form engine options. Language is passed
+// to whisper-cli as an argv value, so it must not be able to look like a flag.
+func validateJobOptions(req createJobRequest) error {
+	if req.Language != "" && !languageCodeRE.MatchString(req.Language) {
+		return fmt.Errorf("invalid language %q", req.Language)
+	}
+	if req.MaxLen < 0 || req.MaxLen > 1000 {
+		return fmt.Errorf("maxLen must be between 0 and 1000")
+	}
+	if req.MaxContext < -1 || req.MaxContext > 4096 {
+		return fmt.Errorf("maxContext must be between -1 and 4096")
+	}
+	return nil
+}
+
 type createJobResponse struct {
 	JobID  string `json:"jobId"`
 	Status string `json:"status"`
@@ -31,8 +49,13 @@ type createJobResponse struct {
 // of after a possibly multi-minute transcription run.
 func (s *Server) handleCreateJob(w http.ResponseWriter, r *http.Request) {
 	var req createJobRequest
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+	if err := decodeJSON(w, r, &req); err != nil {
 		writeErrorMsg(w, http.StatusBadRequest, "invalid JSON body: "+err.Error())
+		return
+	}
+
+	if err := validateJobOptions(req); err != nil {
+		writeError(w, http.StatusBadRequest, err)
 		return
 	}
 
@@ -157,7 +180,7 @@ func (s *Server) handleExportJob(w http.ResponseWriter, r *http.Request) {
 	}
 
 	var req exportJobRequest
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+	if err := decodeJSON(w, r, &req); err != nil {
 		writeErrorMsg(w, http.StatusBadRequest, "invalid JSON body: "+err.Error())
 		return
 	}

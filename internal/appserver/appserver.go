@@ -9,6 +9,7 @@ import (
 	"context"
 	"fmt"
 	"io/fs"
+	"net"
 	"net/http"
 	"path"
 	"strings"
@@ -26,6 +27,9 @@ import (
 // start listening — callers own that, so cmd/dev can run it in a goroutine
 // and Shutdown it later alongside the Vite dev server it launches.
 func New(cfg *config.Config) (*http.Server, error) {
+	if err := requireLoopbackAddr(cfg.Addr); err != nil {
+		return nil, err
+	}
 	distFS, err := fs.Sub(webui.Dist, "dist")
 	if err != nil {
 		return nil, fmt.Errorf("mount embedded frontend: %w", err)
@@ -63,6 +67,23 @@ func New(cfg *config.Config) (*http.Server, error) {
 		// internal/httpapi/sse_handlers.go.
 		ReadHeaderTimeout: 5 * time.Second,
 	}, nil
+}
+
+// requireLoopbackAddr refuses to listen anywhere but a loopback interface:
+// the API browses the filesystem and can point the app at arbitrary
+// executables, so it must never be reachable from the network.
+func requireLoopbackAddr(addr string) error {
+	host, _, err := net.SplitHostPort(addr)
+	if err != nil {
+		return fmt.Errorf("invalid listen address %q: %w", addr, err)
+	}
+	if host == "localhost" {
+		return nil
+	}
+	if ip := net.ParseIP(host); ip != nil && ip.IsLoopback() {
+		return nil
+	}
+	return fmt.Errorf("refusing to listen on %q: only loopback addresses (127.0.0.1, ::1, localhost) are allowed", addr)
 }
 
 // spaHandler serves the embedded frontend build, falling back to

@@ -1,7 +1,6 @@
 package httpapi
 
 import (
-	"encoding/json"
 	"net/http"
 
 	"faster-whisper-gui/internal/fsbrowse"
@@ -56,7 +55,7 @@ type updateSettingsRequest struct {
 // request body, leaving fields not present untouched.
 func (s *Server) handleUpdateSettings(w http.ResponseWriter, r *http.Request) {
 	var req updateSettingsRequest
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+	if err := decodeJSON(w, r, &req); err != nil {
 		writeErrorMsg(w, http.StatusBadRequest, "invalid JSON body: "+err.Error())
 		return
 	}
