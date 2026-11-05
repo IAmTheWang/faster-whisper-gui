@@ -25,6 +25,11 @@ type Pipeline struct {
 	ProbeDuration func(ctx context.Context, mediaPath string) (time.Duration, error)
 	TmpDir        string
 	Engine        transcribe.Engine
+	// PostProcess, if set, runs on the finished .srt (given its path) before
+	// the job is marked done — internal/appserver wires it to the repetition
+	// cleanup in internal/subtitle. A failure is logged but never fails the
+	// job: the subtitle file whisper-cli wrote is still valid without it.
+	PostProcess func(srtPath string) error
 }
 
 // EventPublisher receives per-job lifecycle/progress events. This decouples
@@ -194,6 +199,11 @@ func (q *Queue) process(j *Job) {
 	}
 
 	srtPath := opts.OutputPrefix + ".srt"
+	if q.pipeline.PostProcess != nil {
+		if err := q.pipeline.PostProcess(srtPath); err != nil {
+			slog.Warn("subtitle post-processing failed; keeping whisper-cli's output as is", "job", j.ID, "path", srtPath, "error", err)
+		}
+	}
 	q.store.Update(j.ID, func(job *Job) {
 		job.Status = StatusDone
 		job.Percent = 100

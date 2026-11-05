@@ -9,6 +9,7 @@ import (
 	"context"
 	"fmt"
 	"io/fs"
+	"log/slog"
 	"net"
 	"net/http"
 	"path"
@@ -19,6 +20,7 @@ import (
 	"faster-whisper-gui/internal/httpapi"
 	"faster-whisper-gui/internal/job"
 	"faster-whisper-gui/internal/sseutil"
+	"faster-whisper-gui/internal/subtitle"
 	"faster-whisper-gui/internal/transcribe"
 	"faster-whisper-gui/internal/webui"
 )
@@ -47,6 +49,16 @@ func New(cfg *config.Config) (*http.Server, error) {
 		},
 		TmpDir: cfg.TmpDir,
 		Engine: engine,
+		// whisper hallucinates runaway repetition on silence/noise and masks
+		// profanity ("f*cking"); trim repeats to subtitle.MaxRepeat and
+		// spell masked words out in the saved .srt.
+		PostProcess: func(srtPath string) error {
+			stats, err := subtitle.CleanFile(srtPath)
+			if err == nil && stats.Changed() {
+				slog.Info("cleaned subtitles", "path", srtPath, "cuesDropped", stats.CuesDropped, "linesCollapsed", stats.LinesCollapsed, "linesUncensored", stats.LinesUncensored, "musicCuesDropped", stats.MusicCuesDropped, "longCuesDropped", stats.LongCuesDropped, "fillerCuesDropped", stats.FillerCuesDropped, "fillerLinesTrimmed", stats.FillerLinesTrimmed, "soundCuesDropped", stats.SoundCuesDropped, "soundLinesCleaned", stats.SoundLinesCleaned)
+			}
+			return err
+		},
 	}
 	queue := job.NewQueue(store, pipeline, broker)
 

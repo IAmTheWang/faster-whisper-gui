@@ -311,3 +311,57 @@ func TestQueueFullReturnsErrQueueFull(t *testing.T) {
 		}
 	}
 }
+
+func TestQueuePostProcessRunsBeforeDoneAndNeverFailsTheJob(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		err  error
+	}{{"ok", nil}, {"error is non-fatal", errors.New("disk full")}} {
+		t.Run(tc.name, func(t *testing.T) {
+			store := NewStore()
+			var gotPath string
+			var statusAtCall Status
+			pipeline := Pipeline{
+				ExtractAudio:  noopFfmpeg,
+				ProbeDuration: fixedDuration(time.Second),
+				TmpDir:        t.TempDir(),
+				Engine:        &fakeEngine{},
+			}
+			var jobID string
+			pipeline.PostProcess = func(srtPath string) error {
+				gotPath = srtPath
+				j, _ := store.Get(jobID)
+				statusAtCall = j.Status
+				return tc.err
+			}
+			q := NewQueue(store, pipeline, &fakePublisher{})
+			j, _ := q.Submit(Request{MediaPath: `E:\v\clip.mp4`, OutputMode: OutputSameAsSource})
+			jobID = j.ID
+
+			final := waitForStatus(t, store, j.ID, StatusDone, 2*time.Second)
+			if gotPath != `E:\v\clip.srt` || final.SRTPath != gotPath {
+				t.Errorf("PostProcess path = %q, SRTPath = %q", gotPath, final.SRTPath)
+			}
+			if statusAtCall.IsTerminal() {
+				t.Errorf("PostProcess must run before the job is marked done, status was %s", statusAtCall)
+			}
+		})
+	}
+}
+
+func TestQueuePostProcessSkippedWhenTranscriptionFails(t *testing.T) {
+	store := NewStore()
+	called := false
+	q := NewQueue(store, Pipeline{
+		ExtractAudio:  noopFfmpeg,
+		ProbeDuration: fixedDuration(time.Second),
+		TmpDir:        t.TempDir(),
+		Engine:        &fakeEngine{err: errors.New("boom")},
+		PostProcess:   func(string) error { called = true; return nil },
+	}, &fakePublisher{})
+	j, _ := q.Submit(Request{MediaPath: `E:\v\clip.mp4`, OutputMode: OutputSameAsSource})
+	waitForStatus(t, store, j.ID, StatusFailed, 2*time.Second)
+	if called {
+		t.Fatal("PostProcess must not run for a failed job")
+	}
+}
