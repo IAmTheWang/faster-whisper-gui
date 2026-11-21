@@ -267,13 +267,13 @@ func TestCleanSRTDropsMusicSymbolCues(t *testing.T) {
 	}
 }
 
-func TestCleanSRTDropsCuesLongerThanSevenSeconds(t *testing.T) {
+func TestCleanSRTDropsLongSparseCues(t *testing.T) {
 	in := srt(
 		[3]string{"00:00:01,000 --> 00:00:03,000", "Hello there.", ""},
-		[3]string{"00:56:00,140 --> 00:56:30,120", "Thank you.", ""},                                                                      // 30s hallucination
-		[3]string{"00:12:21,340 --> 00:12:43,600", "I want to see you fucking drooling, I want to see you fucking drooling, so good", ""}, // 22s
-		[3]string{"00:57:00,000 --> 00:57:07,000", "Exactly seven seconds is fine.", ""},
-		[3]string{"00:58:00,000 --> 00:58:07,500", "Seven and a half is not.", ""},
+		[3]string{"00:56:00,140 --> 00:56:30,120", "Thank you.", ""},                          // 30s hallucination
+		[3]string{"00:12:21,340 --> 00:12:43,600", "So good, so good, so good, so good.", ""}, // 22s, ~1.2 chars/s
+		[3]string{"00:57:00,000 --> 00:57:07,000", "Exactly seven seconds is fine.", ""},      // not longer than 7s
+		[3]string{"00:58:00,000 --> 00:58:08,000", "Okay.", ""},                               // 8s, sparse
 	)
 	out, stats, err := CleanSRT([]byte(in))
 	if err != nil {
@@ -282,13 +282,30 @@ func TestCleanSRTDropsCuesLongerThanSevenSeconds(t *testing.T) {
 	if stats.LongCuesDropped != 3 {
 		t.Fatalf("stats = %+v", stats)
 	}
-	for _, gone := range []string{"Thank you", "drooling", "Seven and a half"} {
+	for _, gone := range []string{"Thank you", "So good", "Okay"} {
 		if strings.Contains(string(out), gone) {
 			t.Errorf("%q should have been dropped:\n%s", gone, out)
 		}
 	}
 	if !strings.Contains(string(out), "Hello there.") || !strings.Contains(string(out), "Exactly seven seconds is fine.") {
 		t.Errorf("short cues must survive:\n%s", out)
+	}
+}
+
+func TestCleanSRTKeepsLongDenseSpeech(t *testing.T) {
+	in := srt(
+		[3]string{"00:00:01,000 --> 00:00:09,000", "This is a slow, deliberate explanation that really does last a while.", ""},
+		[3]string{"00:01:00,000 --> 00:01:12,000", "这是一段语速很慢但确实存在的中文讲解内容，应该被保留下来。", ""},
+	)
+	out, stats, err := CleanSRT([]byte(in))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if stats.LongCuesDropped != 0 {
+		t.Fatalf("dense long cues must survive, stats = %+v", stats)
+	}
+	if !strings.Contains(string(out), "slow, deliberate") || !strings.Contains(string(out), "中文讲解") {
+		t.Errorf("content lost:\n%s", out)
 	}
 }
 

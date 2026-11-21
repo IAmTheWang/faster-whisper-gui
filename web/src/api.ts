@@ -123,8 +123,23 @@ async function errorMessageFrom(res: Response): Promise<string> {
   return res.statusText || `HTTP ${res.status}`
 }
 
+// The Go server swaps __API_TOKEN__ in index.html's <meta name="api-token"> for
+// a per-process secret (Vite's dev server does the same via vite.config.ts);
+// every /api call must carry it. A page that never saw index.html — i.e. any
+// other website — has no way to learn it.
+const apiToken = (() => {
+  const v = document.querySelector('meta[name="api-token"]')?.getAttribute('content') ?? ''
+  return v === '__API_TOKEN__' ? '' : v
+})()
+
+function withToken(init?: RequestInit): RequestInit {
+  const headers = new Headers(init?.headers)
+  if (apiToken) headers.set('X-Api-Token', apiToken)
+  return { ...init, headers }
+}
+
 async function request<T>(path: string, init?: RequestInit): Promise<T> {
-  const res = await fetch(path, init)
+  const res = await fetch(path, withToken(init))
   if (!res.ok) {
     throw new Error(await errorMessageFrom(res))
   }
@@ -159,7 +174,7 @@ export const api = {
   },
 
   async cancelJob(id: string): Promise<void> {
-    const res = await fetch(`/api/jobs/${encodeURIComponent(id)}/cancel`, { method: 'POST' })
+    const res = await fetch(`/api/jobs/${encodeURIComponent(id)}/cancel`, withToken({ method: 'POST' }))
     if (!res.ok) {
       throw new Error(await errorMessageFrom(res))
     }
@@ -210,7 +225,10 @@ export interface JobEventHandlers {
 // while a native transport error does not, so that's what distinguishes
 // them below rather than trying to rename the wire event.
 export function subscribeJobEvents(jobId: string, handlers: JobEventHandlers): () => void {
-  const source = new EventSource(`/api/jobs/${encodeURIComponent(jobId)}/events`)
+  // EventSource can't set headers, so the token travels in the query string;
+  // the server accepts that only for this GET endpoint and never logs queries.
+  const tokenQuery = apiToken ? `?token=${encodeURIComponent(apiToken)}` : ''
+  const source = new EventSource(`/api/jobs/${encodeURIComponent(jobId)}/events${tokenQuery}`)
 
   source.addEventListener('progress', (e) => {
     handlers.onProgress?.(JSON.parse((e as MessageEvent).data))

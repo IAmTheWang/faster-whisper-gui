@@ -3,6 +3,8 @@
 package config
 
 import (
+	"crypto/rand"
+	"encoding/hex"
 	"os"
 	"path/filepath"
 	"strings"
@@ -17,6 +19,13 @@ import (
 // it's launched from.
 type Config struct {
 	Addr string // e.g. "127.0.0.1:8080"
+
+	// APIToken is the shared secret every /api request must carry (header
+	// X-Api-Token, or ?token= for EventSource). It is injected into the served
+	// index.html, which a cross-origin page cannot read, so only the app's own
+	// UI can call the API. Taken from FASTER_WHISPER_GUI_TOKEN when set (cmd/dev
+	// shares one token with the Vite dev server), else random per process.
+	APIToken string
 
 	Root       string // repo/executable root
 	WhisperDir string // bin/whisper
@@ -64,6 +73,11 @@ func Load(root string) (*Config, error) {
 		ModelsDir:  filepath.Join(root, "models"),
 		TmpDir:     filepath.Join(root, "tmp"),
 	}
+	token, err := newAPIToken()
+	if err != nil {
+		return nil, err
+	}
+	cfg.APIToken = token
 	cfg.WhisperCliPath = filepath.Join(cfg.WhisperDir, "whisper-cli.exe")
 	cfg.FfmpegPath = filepath.Join(cfg.FfmpegDir, "ffmpeg.exe")
 	cfg.FfprobePath = filepath.Join(cfg.FfmpegDir, "ffprobe.exe")
@@ -161,4 +175,18 @@ func isGoRunDir(dir string) bool {
 		}
 	}
 	return false
+}
+
+// TokenEnvVar names the environment variable that pins the API token.
+const TokenEnvVar = "FASTER_WHISPER_GUI_TOKEN"
+
+func newAPIToken() (string, error) {
+	if t := os.Getenv(TokenEnvVar); t != "" {
+		return t, nil
+	}
+	b := make([]byte, 32)
+	if _, err := rand.Read(b); err != nil {
+		return "", err
+	}
+	return hex.EncodeToString(b), nil
 }

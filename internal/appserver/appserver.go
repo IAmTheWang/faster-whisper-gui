@@ -6,6 +6,7 @@
 package appserver
 
 import (
+	"bytes"
 	"context"
 	"fmt"
 	"io/fs"
@@ -66,11 +67,11 @@ func New(cfg *config.Config) (*http.Server, error) {
 
 	mux := http.NewServeMux()
 	api.RegisterRoutes(mux)
-	mux.Handle("/", spaHandler(distFS))
+	mux.Handle("/", spaHandler(distFS, cfg.APIToken))
 
 	return &http.Server{
 		Addr:    cfg.Addr,
-		Handler: httpapi.WithMiddleware(mux),
+		Handler: httpapi.WithMiddleware(httpapi.WithToken(mux, cfg.APIToken)),
 		// ReadHeaderTimeout guards against slow-header attacks without
 		// touching response write duration. Deliberately no WriteTimeout:
 		// it would be a fixed deadline from when headers finish reading,
@@ -103,7 +104,11 @@ func requireLoopbackAddr(addr string) error {
 // is a single page with no client-side router, so the fallback isn't
 // exercised today, but it's the standard/expected way to host a Vite SPA
 // and costs nothing to have in place for when that changes.
-func spaHandler(distFS fs.FS) http.Handler {
+//
+// index.html is served with tokenPlaceholder replaced by the per-process API
+// token (see config.Config.APIToken); a cross-origin page can't read this
+// response, so only the app's own UI learns the token.
+func spaHandler(distFS fs.FS, token string) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		upath := strings.TrimPrefix(path.Clean(r.URL.Path), "/")
 		if upath == "" || upath == "." {
@@ -118,6 +123,27 @@ func spaHandler(distFS fs.FS) http.Handler {
 			}
 			upath = "index.html"
 		}
+		if upath == "index.html" {
+			serveIndex(w, distFS, token)
+			return
+		}
 		http.ServeFileFS(w, r, distFS, upath)
 	})
+}
+
+// tokenPlaceholder is the literal in web/index.html's api-token <meta> that
+// serveIndex swaps for the real token.
+const tokenPlaceholder = "__API_TOKEN__"
+
+func serveIndex(w http.ResponseWriter, distFS fs.FS, token string) {
+	data, err := fs.ReadFile(distFS, "index.html")
+	if err != nil {
+		http.Error(w, "index.html not found", http.StatusInternalServerError)
+		return
+	}
+	data = bytes.ReplaceAll(data, []byte(tokenPlaceholder), []byte(token))
+	w.Header().Set("Content-Type", "text/html; charset=utf-8")
+	// Per-process token: never let a cached copy outlive a restart.
+	w.Header().Set("Cache-Control", "no-store")
+	w.Write(data)
 }

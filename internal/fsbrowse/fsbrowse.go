@@ -6,6 +6,7 @@
 package fsbrowse
 
 import (
+	"faster-whisper-gui/internal/atomicfile"
 	"fmt"
 	"io"
 	"os"
@@ -309,23 +310,8 @@ func CopyFile(src, dst string) error {
 
 	// Copy into a temp file beside dst and rename it over dst, so a failed or
 	// interrupted copy never leaves a partial subtitle file at dst.
-	out, err := os.CreateTemp(filepath.Dir(dst), ".copy-*.tmp")
-	if err != nil {
+	return atomicfile.Write(dst, func(w io.Writer) error {
+		_, err := io.Copy(w, in)
 		return err
-	}
-	tmpPath := out.Name()
-	if _, err := io.Copy(out, in); err != nil {
-		out.Close()
-		os.Remove(tmpPath)
-		return err
-	}
-	if err := out.Close(); err != nil {
-		os.Remove(tmpPath)
-		return err
-	}
-	if err := os.Rename(tmpPath, dst); err != nil {
-		os.Remove(tmpPath)
-		return err
-	}
-	return nil
+	})
 }

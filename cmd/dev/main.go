@@ -81,7 +81,12 @@ func main() {
 	viteCmd.Dir = webDir
 	viteCmd.Stdout = os.Stdout
 	viteCmd.Stderr = os.Stderr
-	viteCmd.Env = append(os.Environ(), "FASTER_WHISPER_GUI_BACKEND_ADDR="+cfg.Addr)
+	viteCmd.Env = append(os.Environ(),
+		"FASTER_WHISPER_GUI_BACKEND_ADDR="+cfg.Addr,
+		// Same token the Go backend demands on /api; Vite injects it into the
+		// index.html it serves (web/vite.config.ts).
+		config.TokenEnvVar+"="+cfg.APIToken,
+	)
 
 	vite, err := procutil.Start(viteCmd)
 	if err != nil {

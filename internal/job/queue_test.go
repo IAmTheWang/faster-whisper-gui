@@ -3,7 +3,9 @@ package job
 import (
 	"context"
 	"errors"
+	"fmt"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -299,7 +301,7 @@ func TestQueueFullReturnsErrQueueFull(t *testing.T) {
 
 	var fullErr error
 	for i := 0; i < 200 && fullErr == nil; i++ {
-		_, fullErr = q.Submit(Request{MediaPath: `E:\v\x.mp4`, OutputMode: OutputSameAsSource})
+		_, fullErr = q.Submit(Request{MediaPath: fmt.Sprintf(`E:\v\%d.mp4`, i), OutputMode: OutputSameAsSource})
 	}
 	if !errors.Is(fullErr, ErrQueueFull) {
 		t.Fatalf("Submit never reported ErrQueueFull, last err = %v", fullErr)
@@ -363,5 +365,36 @@ func TestQueuePostProcessSkippedWhenTranscriptionFails(t *testing.T) {
 	waitForStatus(t, store, j.ID, StatusFailed, 2*time.Second)
 	if called {
 		t.Fatal("PostProcess must not run for a failed job")
+	}
+}
+
+func TestSubmitRejectsDuplicateTargetAtomically(t *testing.T) {
+	pipeline := Pipeline{
+		ExtractAudio:  noopFfmpeg,
+		ProbeDuration: fixedDuration(time.Second),
+		TmpDir:        t.TempDir(),
+		Engine:        &fakeEngine{delay: 500 * time.Millisecond},
+	}
+	q := NewQueue(NewStore(), pipeline, &fakePublisher{})
+	req := Request{MediaPath: `C:\media.mp4`, OutputMode: OutputSameAsSource}
+
+	const n = 20
+	var wg sync.WaitGroup
+	var ok, dup int32
+	for i := 0; i < n; i++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			switch _, err := q.Submit(req); {
+			case err == nil:
+				atomic.AddInt32(&ok, 1)
+			case errors.Is(err, ErrDuplicateTarget):
+				atomic.AddInt32(&dup, 1)
+			}
+		}()
+	}
+	wg.Wait()
+	if ok != 1 || dup != n-1 {
+		t.Fatalf("accepted=%d duplicates=%d, want 1 and %d", ok, dup, n-1)
 	}
 }

@@ -130,6 +130,12 @@ func (s *Server) handleCreateJob(w http.ResponseWriter, r *http.Request) {
 	}
 
 	j, err := s.Queue.Submit(jobReq)
+	if errors.Is(err, job.ErrDuplicateTarget) {
+		// Authoritative check: Submit holds a lock across check+add, closing the
+		// race the early pre-check above can't (two parallel POSTs both passing it).
+		writeErrorMsg(w, http.StatusConflict, "another unfinished job is already writing "+srtPath)
+		return
+	}
 	if errors.Is(err, job.ErrQueueFull) {
 		writeErrorMsg(w, http.StatusTooManyRequests, "too many jobs are waiting; try again once some have finished")
 		return

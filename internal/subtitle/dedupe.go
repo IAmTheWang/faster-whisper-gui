@@ -19,10 +19,12 @@ import (
 	"bytes"
 	"fmt"
 	"os"
-	"path/filepath"
 	"regexp"
 	"strconv"
 	"strings"
+	"unicode"
+
+	"faster-whisper-gui/internal/atomicfile"
 )
 
 // MaxRepeat is the most times a word/phrase, or a whole cue, may repeat in a
@@ -39,6 +41,37 @@ const maxCueGap = 5.0
 // sentence spread over 22s); real people rarely speak one subtitle for longer
 // than this, so anything over it is treated as a recognition error.
 const maxCueDuration = 7.0
+
+// minLongCueDensity is the speech density, in weighted characters per second,
+// below which a cue longer than maxCueDuration is dropped. Duration alone would
+// also delete genuine long segments (slow lectures, long takes); a hallucination
+// stretched over silence is both long *and* sparse ("Thank you." over 30s is
+// ~0.3), while real speech sits well above this even when slow. CJK characters
+// carry far more information each, so they count cjkCharWeight times.
+const (
+	minLongCueDensity = 1.5
+	cjkCharWeight     = 2.5
+)
+
+// cueDensity returns weighted visible characters per second for a cue's text.
+func cueDensity(lines []string, seconds float64) float64 {
+	if seconds <= 0 {
+		return 0
+	}
+	n := 0.0
+	for _, l := range lines {
+		for _, r := range l {
+			switch {
+			case unicode.IsSpace(r), unicode.IsPunct(r):
+			case unicode.In(r, unicode.Han, unicode.Hiragana, unicode.Katakana, unicode.Hangul):
+				n += cjkCharWeight
+			default:
+				n++
+			}
+		}
+	}
+	return n / seconds
+}
 
 // Stats reports what CleanSRT changed.
 type Stats struct {
@@ -336,7 +369,7 @@ func CleanSRT(src []byte) ([]byte, Stats, error) {
 			}
 			continue
 		}
-		if c.end-c.start > maxCueDuration {
+		if dur := c.end - c.start; dur > maxCueDuration && cueDensity(c.lines, dur) < minLongCueDensity {
 			stats.LongCuesDropped++
 			continue
 		}
@@ -388,22 +421,7 @@ func CleanFile(path string) (Stats, error) {
 	if err != nil || !stats.Changed() {
 		return stats, err
 	}
-	tmp, err := os.CreateTemp(filepath.Dir(path), ".dedupe-*.tmp")
-	if err != nil {
-		return stats, err
-	}
-	tmpPath := tmp.Name()
-	if _, err := tmp.Write(out); err != nil {
-		tmp.Close()
-		os.Remove(tmpPath)
-		return stats, err
-	}
-	if err := tmp.Close(); err != nil {
-		os.Remove(tmpPath)
-		return stats, err
-	}
-	if err := os.Rename(tmpPath, path); err != nil {
-		os.Remove(tmpPath)
+	if err := atomicfile.WriteBytes(path, out); err != nil {
 		return stats, err
 	}
 	return stats, nil

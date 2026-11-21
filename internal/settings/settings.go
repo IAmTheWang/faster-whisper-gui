@@ -8,9 +8,11 @@ package settings
 import (
 	"encoding/json"
 	"fmt"
+	"log"
 	"os"
-	"path/filepath"
 	"sync"
+
+	"faster-whisper-gui/internal/atomicfile"
 )
 
 // Paths holds the user's overrides. An empty field means "use the
@@ -37,9 +39,10 @@ type Store struct {
 
 // Load reads filePath into a Store. A missing file is not an error — it
 // means no overrides have been saved yet, so Get returns a zero-value
-// Paths. A file that exists but fails to parse *is* an error, so a
-// corrupted settings file surfaces at startup instead of silently
-// discarding whatever the user last saved.
+// Paths. A file that exists but fails to parse is moved aside to
+// "<filePath>.bad" (logged) and treated as empty, so a corrupt file can't
+// keep the app from starting while still being kept for inspection; Load only
+// errors if it can't even move the file aside.
 func Load(filePath string) (*Store, error) {
 	s := &Store{filePath: filePath}
 
@@ -52,7 +55,16 @@ func Load(filePath string) (*Store, error) {
 	}
 
 	if err := json.Unmarshal(data, &s.current); err != nil {
-		return nil, fmt.Errorf("parse settings file %s: %w", filePath, err)
+		// A truncated/garbled settings file (e.g. a crash mid-write on an older
+		// version) must not stop the app from starting. Keep the bad file for
+		// inspection and fall back to the defaults.
+		s.current = Paths{}
+		bad := filePath + ".bad"
+		os.Remove(bad)
+		if rerr := os.Rename(filePath, bad); rerr != nil {
+			return nil, fmt.Errorf("parse settings file %s: %w (and could not move it aside: %v)", filePath, err, rerr)
+		}
+		log.Printf("settings: %s is corrupt (%v); moved to %s and using defaults", filePath, err, bad)
 	}
 	return s, nil
 }
@@ -97,25 +109,8 @@ func (s *Store) setLocked(p Paths) error {
 		return fmt.Errorf("marshal settings: %w", err)
 	}
 
-	tmp, err := os.CreateTemp(filepath.Dir(s.filePath), ".settings-*.tmp")
-	if err != nil {
-		return fmt.Errorf("create temp settings file: %w", err)
-	}
-	tmpPath := tmp.Name()
-
-	if _, err := tmp.Write(data); err != nil {
-		tmp.Close()
-		os.Remove(tmpPath)
-		return fmt.Errorf("write temp settings file: %w", err)
-	}
-	if err := tmp.Close(); err != nil {
-		os.Remove(tmpPath)
-		return fmt.Errorf("close temp settings file: %w", err)
-	}
-
-	if err := os.Rename(tmpPath, s.filePath); err != nil {
-		os.Remove(tmpPath)
-		return fmt.Errorf("replace settings file: %w", err)
+	if err := atomicfile.WriteBytes(s.filePath, data); err != nil {
+		return fmt.Errorf("write settings file: %w", err)
 	}
 
 	s.mu.Lock()

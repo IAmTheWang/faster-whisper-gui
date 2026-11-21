@@ -24,8 +24,21 @@ func TestLoadCorruptedFile(t *testing.T) {
 	if err := os.WriteFile(path, []byte("not json"), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := Load(path); err == nil {
-		t.Fatal("Load with corrupted file: want error, got nil")
+	s, err := Load(path)
+	if err != nil {
+		t.Fatalf("a corrupt file must not stop startup, got %v", err)
+	}
+	if got := s.Get(); got != (Paths{}) {
+		t.Fatalf("Get() = %+v, want defaults", got)
+	}
+	if b, err := os.ReadFile(path + ".bad"); err != nil || string(b) != "not json" {
+		t.Fatalf("corrupt file should be kept as .bad: %v %q", err, b)
+	}
+	if _, err := os.Stat(path); !os.IsNotExist(err) {
+		t.Fatal("corrupt settings.json should have been moved away")
+	}
+	if err := s.Set(Paths{ModelsDir: `C:\m`}); err != nil {
+		t.Fatalf("Set after recovery: %v", err)
 	}
 }
 

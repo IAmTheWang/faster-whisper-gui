@@ -117,12 +117,19 @@ func TestLoadCreatesLayoutAndCleanTmpDirWipesIt(t *testing.T) {
 	}
 }
 
-func TestLoadRejectsCorruptSettings(t *testing.T) {
+func TestLoadRecoversFromCorruptSettings(t *testing.T) {
 	root := t.TempDir()
 	if err := os.WriteFile(filepath.Join(root, "settings.json"), []byte("{not json"), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := Load(root); err == nil {
-		t.Fatal("a corrupt settings.json must surface as a Load error")
+	cfg, err := Load(root)
+	if err != nil {
+		t.Fatalf("a corrupt settings.json must not block startup: %v", err)
+	}
+	if got := cfg.EffectiveModelsDir(); got != cfg.ModelsDir {
+		t.Fatalf("EffectiveModelsDir = %q, want default %q", got, cfg.ModelsDir)
+	}
+	if _, err := os.Stat(filepath.Join(root, "settings.json.bad")); err != nil {
+		t.Fatalf("corrupt file should be kept as settings.json.bad: %v", err)
 	}
 }

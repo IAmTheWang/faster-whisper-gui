@@ -23,7 +23,7 @@ func TestSpaHandlerFallback(t *testing.T) {
 	h := spaHandler(fstest.MapFS{
 		"index.html":    {Data: []byte("<html>app</html>")},
 		"assets/app.js": {Data: []byte("js")},
-	})
+	}, "tok")
 	for path, want := range map[string]int{
 		"/":               200,
 		"/assets/app.js":  200,
@@ -34,6 +34,22 @@ func TestSpaHandlerFallback(t *testing.T) {
 		h.ServeHTTP(rr, httptest.NewRequest("GET", path, nil))
 		if rr.Code != want {
 			t.Errorf("GET %s = %d, want %d", path, rr.Code, want)
+		}
+	}
+}
+
+func TestIndexGetsAPIToken(t *testing.T) {
+	h := spaHandler(fstest.MapFS{
+		"index.html": {Data: []byte(`<meta name="api-token" content="__API_TOKEN__">`)},
+	}, "abc123")
+	for _, path := range []string{"/", "/index.html", "/some/route"} {
+		rr := httptest.NewRecorder()
+		h.ServeHTTP(rr, httptest.NewRequest("GET", path, nil))
+		if got := rr.Body.String(); got != `<meta name="api-token" content="abc123">` {
+			t.Errorf("GET %s body = %q", path, got)
+		}
+		if rr.Header().Get("Cache-Control") != "no-store" {
+			t.Errorf("GET %s must not be cacheable", path)
 		}
 	}
 }

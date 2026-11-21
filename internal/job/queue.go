@@ -9,6 +9,8 @@ import (
 	"log/slog"
 	"os"
 	"path/filepath"
+	"strings"
+	"sync"
 	"time"
 
 	"faster-whisper-gui/internal/transcribe"
@@ -46,6 +48,10 @@ type Queue struct {
 	pipeline Pipeline
 	events   EventPublisher
 	submit   chan *Job
+
+	// submitMu makes "no unfinished job targets this .srt" + "add the job" one
+	// atomic step, so two concurrent submissions can't both pass the check.
+	submitMu sync.Mutex
 }
 
 func NewQueue(store *Store, pipeline Pipeline, events EventPublisher) *Queue {
@@ -64,6 +70,10 @@ const progressInterval = 200 * time.Millisecond
 
 // ErrQueueFull is returned by Submit when too many jobs are already waiting.
 var ErrQueueFull = errors.New("job queue is full")
+
+// ErrDuplicateTarget is returned by Submit when another unfinished job already
+// writes the same .srt file; the second job would silently clobber the first.
+var ErrDuplicateTarget = errors.New("another unfinished job is already writing this subtitle file")
 
 // Submit creates a new job in Queued state and enqueues it for processing.
 // The caller is expected to have already validated req (media file exists,
@@ -85,6 +95,15 @@ func (q *Queue) Submit(req Request) (*Job, error) {
 		UpdatedAt: now,
 		ctx:       ctx,
 		cancel:    cancel,
+	}
+	q.submitMu.Lock()
+	defer q.submitMu.Unlock()
+	srtPath := OutputPrefix(req) + ".srt"
+	for _, other := range q.store.List() {
+		if !other.Status.IsTerminal() && strings.EqualFold(OutputPrefix(other.Request)+".srt", srtPath) {
+			cancel()
+			return nil, ErrDuplicateTarget
+		}
 	}
 	q.store.Add(j)
 	select {

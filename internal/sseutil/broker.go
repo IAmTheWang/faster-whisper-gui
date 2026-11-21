@@ -36,16 +36,19 @@ func (b *Broker) Subscribe(jobID string) (ch chan Event, unsubscribe func()) {
 	b.subs[jobID][ch] = struct{}{}
 	b.mu.Unlock()
 
+	var once sync.Once
 	unsubscribe = func() {
-		b.mu.Lock()
-		defer b.mu.Unlock()
-		if set, ok := b.subs[jobID]; ok {
-			delete(set, ch)
-			if len(set) == 0 {
-				delete(b.subs, jobID)
+		once.Do(func() {
+			b.mu.Lock()
+			defer b.mu.Unlock()
+			if set, ok := b.subs[jobID]; ok {
+				delete(set, ch)
+				if len(set) == 0 {
+					delete(b.subs, jobID)
+				}
 			}
-		}
-		close(ch)
+			close(ch)
+		})
 	}
 	return ch, unsubscribe
 }
@@ -54,13 +57,42 @@ func (b *Broker) Subscribe(jobID string) (ch chan Event, unsubscribe func()) {
 // subscribers that haven't drained their channel simply miss the event
 // rather than blocking the job pipeline — SSE progress is best-effort, and
 // GET /api/jobs/{id} remains available for the authoritative current state.
+//
+// Terminal events (done/error/canceled) are the exception: a client that
+// misses one would wait for a state change that never comes, so when a
+// subscriber's buffer is full the oldest buffered (progress) event is evicted
+// to make room.
 func (b *Broker) Publish(jobID string, eventType string, data any) {
+	ev := Event{Type: eventType, Data: data}
+	terminal := isTerminal(eventType)
 	b.mu.Lock()
 	defer b.mu.Unlock()
 	for ch := range b.subs[jobID] {
 		select {
-		case ch <- Event{Type: eventType, Data: data}:
+		case ch <- ev:
+			continue
+		default:
+		}
+		if !terminal {
+			continue
+		}
+		// Publish holds b.mu, so no other publisher can refill the slot we free;
+		// a concurrent reader can only make more room.
+		select {
+		case <-ch:
+		default:
+		}
+		select {
+		case ch <- ev:
 		default:
 		}
 	}
+}
+
+func isTerminal(eventType string) bool {
+	switch eventType {
+	case "done", "error", "canceled":
+		return true
+	}
+	return false
 }
