@@ -11,7 +11,7 @@ import (
 // not just the API routes, so a panic anywhere still gets a clean 500
 // instead of taking the server down.
 func WithMiddleware(h http.Handler) http.Handler {
-	return recoverMiddleware(loggingMiddleware(hostGuard(h)))
+	return recoverMiddleware(loggingMiddleware(securityHeaders(hostGuard(h))))
 }
 
 func loggingMiddleware(next http.Handler) http.Handler {
@@ -55,4 +55,23 @@ func (sw *statusWriter) Flush() {
 	if f, ok := sw.ResponseWriter.(http.Flusher); ok {
 		f.Flush()
 	}
+}
+
+// contentSecurityPolicy locks the UI down to its own origin: no inline or
+// third-party script, no framing, no <base> hijacking. Inline styles stay
+// allowed because components set style attributes.
+const contentSecurityPolicy = "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; " +
+	"img-src 'self' data:; connect-src 'self'; frame-ancestors 'none'; base-uri 'none'; form-action 'self'"
+
+// securityHeaders hardens every response (UI and API) against framing,
+// MIME sniffing and referrer leakage.
+func securityHeaders(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		h := w.Header()
+		h.Set("X-Content-Type-Options", "nosniff")
+		h.Set("X-Frame-Options", "DENY")
+		h.Set("Referrer-Policy", "no-referrer")
+		h.Set("Content-Security-Policy", contentSecurityPolicy)
+		next.ServeHTTP(w, r)
+	})
 }

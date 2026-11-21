@@ -52,6 +52,9 @@ type Queue struct {
 	// submitMu makes "no unfinished job targets this .srt" + "add the job" one
 	// atomic step, so two concurrent submissions can't both pass the check.
 	submitMu sync.Mutex
+	closed   bool // set by Shutdown (under submitMu); Submit then refuses new jobs
+
+	workerDone chan struct{} // closed when the worker goroutine has exited
 }
 
 func NewQueue(store *Store, pipeline Pipeline, events EventPublisher) *Queue {
@@ -60,6 +63,8 @@ func NewQueue(store *Store, pipeline Pipeline, events EventPublisher) *Queue {
 		pipeline: pipeline,
 		events:   events,
 		submit:   make(chan *Job, 64),
+
+		workerDone: make(chan struct{}),
 	}
 	go q.run()
 	return q
@@ -70,6 +75,9 @@ const progressInterval = 200 * time.Millisecond
 
 // ErrQueueFull is returned by Submit when too many jobs are already waiting.
 var ErrQueueFull = errors.New("job queue is full")
+
+// ErrQueueClosed is returned by Submit once Shutdown has been called.
+var ErrQueueClosed = errors.New("job queue is shutting down")
 
 // ErrDuplicateTarget is returned by Submit when another unfinished job already
 // writes the same .srt file; the second job would silently clobber the first.
@@ -98,6 +106,10 @@ func (q *Queue) Submit(req Request) (*Job, error) {
 	}
 	q.submitMu.Lock()
 	defer q.submitMu.Unlock()
+	if q.closed {
+		cancel()
+		return nil, ErrQueueClosed
+	}
 	srtPath := OutputPrefix(req) + ".srt"
 	for _, other := range q.store.List() {
 		if !other.Status.IsTerminal() && strings.EqualFold(OutputPrefix(other.Request)+".srt", srtPath) {
@@ -139,7 +151,36 @@ func (q *Queue) Cancel(id string) bool {
 	return true
 }
 
+// Shutdown stops accepting jobs, cancels every unfinished one (a job still
+// waiting is marked canceled at once; a running one unwinds through its
+// context, which also kills its subprocess tree and removes its temp WAV) and
+// waits for the worker goroutine to exit or ctx to expire. Open SSE streams
+// get their final "canceled" event, so they end on their own instead of
+// holding http.Server.Shutdown open. Safe to call more than once.
+func (q *Queue) Shutdown(ctx context.Context) error {
+	q.submitMu.Lock()
+	if !q.closed {
+		q.closed = true
+		close(q.submit) // Submit sends under submitMu and checks closed first
+	}
+	q.submitMu.Unlock()
+
+	for _, j := range q.store.List() {
+		if !j.Status.IsTerminal() {
+			q.Cancel(j.ID)
+		}
+	}
+
+	select {
+	case <-q.workerDone:
+		return nil
+	case <-ctx.Done():
+		return ctx.Err()
+	}
+}
+
 func (q *Queue) run() {
+	defer close(q.workerDone)
 	for j := range q.submit {
 		q.safeProcess(j)
 	}
@@ -172,6 +213,19 @@ func (q *Queue) process(j *Job) {
 	if !q.setStatus(j.ID, StatusExtractingAudio, 0, "Extracting audio") {
 		return
 	}
+	// ffprobe is independent of the extraction, so run them side by side; the
+	// probe is canceled with the job and when extraction fails first.
+	probeCtx, stopProbe := context.WithCancel(ctx)
+	defer stopProbe()
+	type probeResult struct {
+		d   time.Duration
+		err error
+	}
+	probed := make(chan probeResult, 1)
+	go func() {
+		d, err := q.pipeline.ProbeDuration(probeCtx, j.Request.MediaPath)
+		probed <- probeResult{d, err}
+	}()
 	if err := q.pipeline.ExtractAudio(ctx, j.Request.MediaPath, tmpWav); err != nil {
 		q.finishWithError(j.ID, ctx, err)
 		return
@@ -180,7 +234,8 @@ func (q *Queue) process(j *Job) {
 	// The duration only drives the progress percentage, so a probe failure
 	// (e.g. ffprobe reporting N/A for some webm/mkv files) must not fail the
 	// job — without it the engine falls back to whisper-cli's own percentage.
-	duration, err := q.pipeline.ProbeDuration(ctx, j.Request.MediaPath)
+	pr := <-probed
+	duration, err := pr.d, pr.err
 	if err != nil {
 		if ctx.Err() != nil {
 			q.finishWithError(j.ID, ctx, err)

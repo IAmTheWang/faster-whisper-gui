@@ -58,3 +58,30 @@ func TestManagedProcess_CloseIsIdempotentAndStopAfterCloseIsNoop(t *testing.T) {
 		t.Fatalf("Stop after Close: %v", err)
 	}
 }
+
+// Creating the process suspended must not leave it frozen: it has to be
+// resumed and run to completion with its output intact.
+func TestStart_ResumesSuspendedProcess(t *testing.T) {
+	cmd := exec.Command("cmd", "/c", "echo hello & exit 3")
+	var out bytes.Buffer
+	cmd.Stdout = &out
+	mp, err := Start(cmd)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer mp.Close()
+
+	done := make(chan error, 1)
+	go func() { done <- mp.Wait() }()
+	select {
+	case err := <-done:
+		if ee, ok := err.(*exec.ExitError); !ok || ee.ExitCode() != 3 {
+			t.Fatalf("Wait = %v, want exit code 3", err)
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("process never ran: still suspended?")
+	}
+	if got := bytes.TrimSpace(out.Bytes()); string(got) != "hello" {
+		t.Fatalf("stdout = %q, want hello", got)
+	}
+}

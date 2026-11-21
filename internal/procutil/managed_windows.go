@@ -2,10 +2,14 @@ package procutil
 
 import (
 	"context"
+	"fmt"
 	"log/slog"
 	"os/exec"
 	"sync"
+	"syscall"
 	"time"
+
+	"golang.org/x/sys/windows"
 )
 
 // cancelWaitDelay bounds how long Wait blocks on I/O pipes after the process
@@ -29,27 +33,63 @@ type ManagedProcess struct {
 // server is itself running inside a restrictive parent job/container — it
 // logs a warning and degrades to relying on cmd.Process.Kill() alone; it
 // does not treat that as a fatal error.
+//
+// The process is created suspended, put into the job, and only then resumed,
+// so it cannot run — or spawn a child that would escape the job — before the
+// assignment. It is always resumed, whether or not job tracking succeeded.
 func Start(cmd *exec.Cmd) (*ManagedProcess, error) {
+	if cmd.SysProcAttr == nil {
+		cmd.SysProcAttr = &syscall.SysProcAttr{}
+	}
+	cmd.SysProcAttr.CreationFlags |= windows.CREATE_SUSPENDED
 	if err := cmd.Start(); err != nil {
 		return nil, err
 	}
 
 	mp := &ManagedProcess{cmd: cmd, done: make(chan struct{})}
+	mp.job = attachToJob(cmd)
 
+	if err := resumeProcess(cmd.Process.Pid); err != nil {
+		_ = cmd.Process.Kill()
+		if mp.job != nil {
+			_ = mp.job.Close()
+		}
+		_ = cmd.Wait()
+		return nil, fmt.Errorf("resume process %d: %w", cmd.Process.Pid, err)
+	}
+	return mp, nil
+}
+
+// attachToJob binds the (still suspended) process to a fresh job object, or
+// returns nil after logging a warning when that is impossible.
+func attachToJob(cmd *exec.Cmd) *JobObject {
 	job, err := NewJobObject()
 	if err != nil {
 		slog.Warn("procutil: job object unavailable, falling back to direct process kill", "error", err)
-		return mp, nil
+		return nil
 	}
-
 	if err := job.Assign(cmd); err != nil {
 		slog.Warn("procutil: failed to assign process to job object, falling back to direct process kill", "pid", cmd.Process.Pid, "error", err)
 		_ = job.Close()
-		return mp, nil
+		return nil
 	}
+	return job
+}
 
-	mp.job = job
-	return mp, nil
+var procNtResumeProcess = windows.NewLazySystemDLL("ntdll.dll").NewProc("NtResumeProcess")
+
+// resumeProcess resumes a process created with CREATE_SUSPENDED. exec.Cmd does
+// not expose the initial thread's handle, so the whole process is resumed.
+func resumeProcess(pid int) error {
+	h, err := windows.OpenProcess(windows.PROCESS_SUSPEND_RESUME, false, uint32(pid))
+	if err != nil {
+		return fmt.Errorf("open process: %w", err)
+	}
+	defer windows.CloseHandle(h)
+	if status, _, _ := procNtResumeProcess.Call(uintptr(h)); status != 0 {
+		return fmt.Errorf("NtResumeProcess: NTSTATUS %#x", status)
+	}
+	return nil
 }
 
 // StartContext is Start plus context cancellation: when ctx is done the whole

@@ -26,10 +26,38 @@ import (
 	"faster-whisper-gui/internal/webui"
 )
 
-// New builds an *http.Server for cfg, ready to ListenAndServe. It does not
+// App is the assembled backend: an *http.Server plus the job queue behind it.
+// It embeds the server, so Serve/ListenAndServe work as usual; Shutdown and
+// Close additionally cancel the unfinished jobs first, so a transcription in
+// flight ends cleanly (its temp WAV removed, its SSE streams closed) instead
+// of only dying when the process exits.
+type App struct {
+	*http.Server
+	queue *job.Queue
+}
+
+// Shutdown cancels all jobs, then gracefully shuts the HTTP server down. Both
+// steps share ctx's deadline.
+func (a *App) Shutdown(ctx context.Context) error {
+	if err := a.queue.Shutdown(ctx); err != nil {
+		slog.Warn("job queue did not stop in time", "error", err)
+	}
+	return a.Server.Shutdown(ctx)
+}
+
+// Close cancels all jobs (waiting briefly for them to unwind) and then closes
+// the HTTP server immediately, dropping open connections.
+func (a *App) Close() error {
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
+	_ = a.queue.Shutdown(ctx)
+	return a.Server.Close()
+}
+
+// New builds the backend for cfg, ready to Serve/ListenAndServe. It does not
 // start listening — callers own that, so cmd/dev can run it in a goroutine
 // and Shutdown it later alongside the Vite dev server it launches.
-func New(cfg *config.Config) (*http.Server, error) {
+func New(cfg *config.Config) (*App, error) {
 	if err := requireLoopbackAddr(cfg.Addr); err != nil {
 		return nil, err
 	}
@@ -69,7 +97,7 @@ func New(cfg *config.Config) (*http.Server, error) {
 	api.RegisterRoutes(mux)
 	mux.Handle("/", spaHandler(distFS, cfg.APIToken))
 
-	return &http.Server{
+	srv := &http.Server{
 		Addr:    cfg.Addr,
 		Handler: httpapi.WithMiddleware(httpapi.WithToken(mux, cfg.APIToken)),
 		// ReadHeaderTimeout guards against slow-header attacks without
@@ -79,7 +107,8 @@ func New(cfg *config.Config) (*http.Server, error) {
 		// connections during a multi-minute transcription. See
 		// internal/httpapi/sse_handlers.go.
 		ReadHeaderTimeout: 5 * time.Second,
-	}, nil
+	}
+	return &App{Server: srv, queue: queue}, nil
 }
 
 // requireLoopbackAddr refuses to listen anywhere but a loopback interface:
@@ -126,6 +155,10 @@ func spaHandler(distFS fs.FS, token string) http.Handler {
 		if upath == "index.html" {
 			serveIndex(w, distFS, token)
 			return
+		}
+		// Vite emits content-hashed files under assets/, which never change.
+		if strings.HasPrefix(upath, "assets/") {
+			w.Header().Set("Cache-Control", "public, max-age=31536000, immutable")
 		}
 		http.ServeFileFS(w, r, distFS, upath)
 	})

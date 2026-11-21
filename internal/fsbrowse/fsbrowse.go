@@ -193,13 +193,11 @@ func ListFiltered(dir string, kindOf func(name string) string) (Listing, error) 
 		})
 	}
 
-	sort.SliceStable(listing.Entries, func(i, j int) bool {
-		a, b := listing.Entries[i], listing.Entries[j]
-		if (a.Type == "dir") != (b.Type == "dir") {
-			return a.Type == "dir"
-		}
-		return strings.ToLower(a.Name) < strings.ToLower(b.Name)
-	})
+	keys := make([]string, len(listing.Entries))
+	for i, e := range listing.Entries {
+		keys[i] = strings.ToLower(e.Name) // once per entry, not once per comparison
+	}
+	sort.Stable(&entrySorter{entries: listing.Entries, keys: keys})
 
 	return listing, nil
 }
@@ -314,4 +312,23 @@ func CopyFile(src, dst string) error {
 		_, err := io.Copy(w, in)
 		return err
 	})
+}
+
+// entrySorter orders directories first, then by precomputed lower-case name,
+// keeping keys aligned with entries through every swap.
+type entrySorter struct {
+	entries []Entry
+	keys    []string
+}
+
+func (s *entrySorter) Len() int { return len(s.entries) }
+func (s *entrySorter) Swap(i, j int) {
+	s.entries[i], s.entries[j] = s.entries[j], s.entries[i]
+	s.keys[i], s.keys[j] = s.keys[j], s.keys[i]
+}
+func (s *entrySorter) Less(i, j int) bool {
+	if di, dj := s.entries[i].Type == "dir", s.entries[j].Type == "dir"; di != dj {
+		return di
+	}
+	return s.keys[i] < s.keys[j]
 }

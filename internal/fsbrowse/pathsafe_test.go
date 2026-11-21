@@ -13,6 +13,10 @@ func TestCheckSafePath(t *testing.T) {
 		`D:\a\com1\b.mp4`,
 		`D:\a\LPT9.mp4`,
 		`C:\videos\aux .mp4`,
+		`C:\videos\clip.srt:hidden`,       // NTFS alternate data stream
+		`C:\videos\x.mp4:Zone.Identifier`, // same
+		"C:\\videos\\COM\u00b9.txt",       // superscript digits are reserved too
+		"C:\\videos\\lpt\u00b3",
 	}
 	for _, p := range bad {
 		if err := checkSafePath(p); err == nil {

@@ -19,6 +19,12 @@ func checkSafePath(clean string) error {
 	if len(rest) >= 2 && rest[1] == ':' {
 		rest = rest[2:]
 	}
+	// Only the drive letter may carry a colon: "file.srt:stream" is an NTFS
+	// alternate data stream, which the file checks would otherwise treat as the
+	// ordinary file it is attached to.
+	if strings.Contains(rest, ":") {
+		return fmt.Errorf("a colon is only allowed in the drive letter: %q", clean)
+	}
 	for _, seg := range strings.Split(rest, `\`) {
 		if isReservedDeviceName(seg) {
 			return fmt.Errorf("reserved device name %q is not allowed in a path", seg)
@@ -36,8 +42,10 @@ func isReservedDeviceName(seg string) bool {
 	case "CON", "PRN", "AUX", "NUL", "CONIN$", "CONOUT$":
 		return true
 	}
-	if len(seg) == 4 && (strings.HasPrefix(seg, "COM") || strings.HasPrefix(seg, "LPT")) {
-		return seg[3] >= '1' && seg[3] <= '9'
+	// COM1-9 / LPT1-9, plus the superscript digits (COM¹, COM², COM³) that
+	// Windows also reserves.
+	if r := []rune(seg); len(r) == 4 && (strings.HasPrefix(seg, "COM") || strings.HasPrefix(seg, "LPT")) {
+		return (r[3] >= '1' && r[3] <= '9') || r[3] == '\u00b9' || r[3] == '\u00b2' || r[3] == '\u00b3'
 	}
 	return false
 }

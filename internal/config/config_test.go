@@ -102,15 +102,24 @@ func TestLoadCreatesLayoutAndCleanTmpDirWipesIt(t *testing.T) {
 	if err := os.WriteFile(stale, []byte("x"), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	if err := os.Mkdir(filepath.Join(cfg.TmpDir, "subdir"), 0o755); err != nil {
+	keep := filepath.Join(cfg.TmpDir, "notes.txt")
+	if err := os.WriteFile(keep, []byte("mine"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Mkdir(filepath.Join(cfg.TmpDir, "subdir.wav"), 0o755); err != nil {
 		t.Fatal(err)
 	}
 	if err := cfg.CleanTmpDir(); err != nil {
 		t.Fatalf("CleanTmpDir: %v", err)
 	}
-	entries, _ := os.ReadDir(cfg.TmpDir)
-	if len(entries) != 0 {
-		t.Fatalf("tmp dir not emptied: %v", entries)
+	if _, err := os.Stat(stale); !os.IsNotExist(err) {
+		t.Fatal("stale.wav should have been removed")
+	}
+	if _, err := os.Stat(keep); err != nil {
+		t.Fatal("CleanTmpDir must not touch files that are not scratch WAVs")
+	}
+	if _, err := os.Stat(filepath.Join(cfg.TmpDir, "subdir.wav")); err != nil {
+		t.Fatal("CleanTmpDir must not remove directories")
 	}
 	if _, err := os.Stat(cfg.TmpDir); err != nil {
 		t.Fatal("CleanTmpDir must keep the directory itself")

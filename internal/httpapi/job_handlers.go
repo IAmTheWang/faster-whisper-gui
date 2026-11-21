@@ -136,6 +136,10 @@ func (s *Server) handleCreateJob(w http.ResponseWriter, r *http.Request) {
 		writeErrorMsg(w, http.StatusConflict, "another unfinished job is already writing "+srtPath)
 		return
 	}
+	if errors.Is(err, job.ErrQueueClosed) {
+		writeErrorMsg(w, http.StatusServiceUnavailable, "the server is shutting down")
+		return
+	}
 	if errors.Is(err, job.ErrQueueFull) {
 		writeErrorMsg(w, http.StatusTooManyRequests, "too many jobs are waiting; try again once some have finished")
 		return

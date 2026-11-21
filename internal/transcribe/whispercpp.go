@@ -69,6 +69,10 @@ var segmentLineRe = regexp.MustCompile(`\[\d{2}:\d{2}:\d{2}\.\d{3}\s*-->\s*(\d{2
 var stderrPercentRe = regexp.MustCompile(`progress\s*=\s*(\d+)%`)
 
 func parseSegmentEnd(line string) (end time.Duration, text string, ok bool) {
+	// whisper-cli prints a lot of non-segment output; skip the regex for it.
+	if !strings.Contains(line, "-->") {
+		return 0, "", false
+	}
 	m := segmentLineRe.FindStringSubmatch(line)
 	if m == nil {
 		return 0, "", false

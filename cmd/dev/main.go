@@ -77,7 +77,9 @@ func main() {
 	}()
 
 	webDir := filepath.Join(rootDir, "web")
-	viteCmd := exec.CommandContext(ctx, "bun", "run", "dev")
+	// Plain exec.Command, not CommandContext: procutil owns the lifetime (vite.Stop
+	// kills the whole bun/node tree), CommandContext would only kill the direct child.
+	viteCmd := exec.Command("bun", "run", "dev")
 	viteCmd.Dir = webDir
 	viteCmd.Stdout = os.Stdout
 	viteCmd.Stderr = os.Stderr
@@ -117,6 +119,8 @@ func main() {
 	defer cancel()
 	if err := srv.Shutdown(shutdownCtx); err != nil {
 		log.Printf("[go]   shutdown error: %v", err)
+		// Open SSE streams can outlast the grace period; drop them.
+		_ = srv.Close()
 	}
 
 	if err := vite.Stop(); err != nil {

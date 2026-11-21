@@ -398,3 +398,43 @@ func TestSubmitRejectsDuplicateTargetAtomically(t *testing.T) {
 		t.Fatalf("accepted=%d duplicates=%d, want 1 and %d", ok, dup, n-1)
 	}
 }
+
+func TestShutdownCancelsJobsAndRefusesNewOnes(t *testing.T) {
+	store := NewStore()
+	block := make(chan struct{})
+	pipeline := Pipeline{
+		ExtractAudio: func(ctx context.Context, _, _ string) error {
+			select {
+			case <-block:
+			case <-ctx.Done():
+				return ctx.Err()
+			}
+			return nil
+		},
+		ProbeDuration: fixedDuration(time.Second),
+		TmpDir:        t.TempDir(),
+		Engine:        &fakeEngine{},
+	}
+	q := NewQueue(store, pipeline, &fakePublisher{})
+	defer close(block)
+
+	running, _ := q.Submit(Request{MediaPath: `E:\v\1.mp4`, OutputMode: OutputSameAsSource})
+	waiting, _ := q.Submit(Request{MediaPath: `E:\v\2.mp4`, OutputMode: OutputSameAsSource})
+
+	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+	defer cancel()
+	if err := q.Shutdown(ctx); err != nil {
+		t.Fatalf("Shutdown: %v", err)
+	}
+	for _, id := range []string{running.ID, waiting.ID} {
+		if j, _ := store.Get(id); j.Status != StatusCanceled {
+			t.Errorf("job %s status = %s, want canceled", id, j.Status)
+		}
+	}
+	if _, err := q.Submit(Request{MediaPath: `E:\v\3.mp4`, OutputMode: OutputSameAsSource}); !errors.Is(err, ErrQueueClosed) {
+		t.Fatalf("Submit after Shutdown = %v, want ErrQueueClosed", err)
+	}
+	if err := q.Shutdown(ctx); err != nil {
+		t.Fatalf("second Shutdown: %v", err)
+	}
+}

@@ -5,6 +5,7 @@ package config
 import (
 	"crypto/rand"
 	"encoding/hex"
+	"errors"
 	"os"
 	"path/filepath"
 	"strings"
@@ -144,20 +145,27 @@ func (c *Config) EffectiveDefaultVideoDir() string {
 	return c.Settings.Get().DefaultVideoDir
 }
 
-// CleanTmpDir removes any leftover files from a previous run that crashed
+// CleanTmpDir removes leftover scratch WAVs from a previous run that crashed
 // before its own cleanup ran (internal/job's queue otherwise removes each
-// job's temp WAV itself on both success and failure).
+// job's temp WAV itself on both success and failure). Only top-level *.wav
+// files are touched — a mistaken -root pointing at a directory whose "tmp"
+// holds someone's other files must not wipe them — and a file that can't be
+// removed (still locked) doesn't stop the rest: the errors are joined.
 func (c *Config) CleanTmpDir() error {
 	entries, err := os.ReadDir(c.TmpDir)
 	if err != nil {
 		return err
 	}
+	var errs []error
 	for _, e := range entries {
-		if err := os.RemoveAll(filepath.Join(c.TmpDir, e.Name())); err != nil {
-			return err
+		if e.IsDir() || !strings.EqualFold(filepath.Ext(e.Name()), ".wav") {
+			continue
+		}
+		if err := os.Remove(filepath.Join(c.TmpDir, e.Name())); err != nil {
+			errs = append(errs, err)
 		}
 	}
-	return nil
+	return errors.Join(errs...)
 }
 
 // isGoRunDir reports whether dir looks like the throwaway build directory
