@@ -1,8 +1,18 @@
-import { api, type BrowseKind, type UpdateSettingsRequest } from '../api'
-import { dirnameOf, errMsg } from '../dom'
-import { mountDirPicker } from './dirPicker'
+import { api, type UpdateSettingsRequest } from '../api'
+import { dirnameOf, errMsg, requireEl } from '../dom'
+import { mountDirPicker, type PickerKind } from './dirPicker'
 
 type SettingsField = 'ffmpegPath' | 'whisperCliPath' | 'modelsDir' | 'defaultVideoDir'
+
+const SETTINGS_FIELDS: readonly SettingsField[] = ['ffmpegPath', 'whisperCliPath', 'modelsDir', 'defaultVideoDir']
+
+function isSettingsField(value: unknown): value is SettingsField {
+  return (SETTINGS_FIELDS as readonly unknown[]).includes(value)
+}
+
+function isPickerKind(value: unknown): value is PickerKind {
+  return value === 'exe' || value === 'dir'
+}
 
 // mountSettingsPanel lets the user override where ffmpeg.exe, whisper-cli.exe,
 // and the models directory live, instead of requiring them under
@@ -52,17 +62,17 @@ export function mountSettingsPanel(root: HTMLElement, onSaved: () => void): void
   `
 
   const inputs: Record<SettingsField, HTMLInputElement> = {
-    ffmpegPath: root.querySelector<HTMLInputElement>('input[data-field="ffmpegPath"]')!,
-    whisperCliPath: root.querySelector<HTMLInputElement>('input[data-field="whisperCliPath"]')!,
-    modelsDir: root.querySelector<HTMLInputElement>('input[data-field="modelsDir"]')!,
-    defaultVideoDir: root.querySelector<HTMLInputElement>('input[data-field="defaultVideoDir"]')!,
+    ffmpegPath: requireEl<HTMLInputElement>(root, 'input[data-field="ffmpegPath"]'),
+    whisperCliPath: requireEl<HTMLInputElement>(root, 'input[data-field="whisperCliPath"]'),
+    modelsDir: requireEl<HTMLInputElement>(root, 'input[data-field="modelsDir"]'),
+    defaultVideoDir: requireEl<HTMLInputElement>(root, 'input[data-field="defaultVideoDir"]'),
   }
 
-  const saveBtn = root.querySelector<HTMLButtonElement>('.save-btn')!
-  const resetBtn = root.querySelector<HTMLButtonElement>('.reset-btn')!
-  const formError = root.querySelector<HTMLDivElement>('.form-error')!
+  const saveBtn = requireEl<HTMLButtonElement>(root, '.save-btn')
+  const resetBtn = requireEl<HTMLButtonElement>(root, '.reset-btn')
+  const formError = requireEl<HTMLDivElement>(root, '.form-error')
 
-  const picker = mountDirPicker(root.querySelector<HTMLDivElement>('.picker-mount')!)
+  const picker = mountDirPicker(requireEl<HTMLDivElement>(root, '.picker-mount'))
 
   async function loadSettings(): Promise<void> {
     const s = await api.settings()
@@ -75,8 +85,7 @@ export function mountSettingsPanel(root: HTMLElement, onSaved: () => void): void
     inputs.defaultVideoDir.value = s.defaultVideoDir
   }
 
-  function openPicker(field: SettingsField, kind: BrowseKind): void {
-    if (kind !== 'exe' && kind !== 'dir') return
+  function openPicker(field: SettingsField, kind: PickerKind): void {
     formError.textContent = ''
     const current = inputs[field].value.trim()
     void picker.open({
@@ -90,7 +99,8 @@ export function mountSettingsPanel(root: HTMLElement, onSaved: () => void): void
 
   root.querySelectorAll<HTMLButtonElement>('.browse-btn').forEach((btn) => {
     btn.addEventListener('click', () => {
-      openPicker(btn.dataset.field as SettingsField, btn.dataset.kind as BrowseKind)
+      const { field, kind } = btn.dataset
+      if (isSettingsField(field) && isPickerKind(kind)) openPicker(field, kind)
     })
   })
 

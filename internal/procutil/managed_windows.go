@@ -60,10 +60,15 @@ func Start(cmd *exec.Cmd) (*ManagedProcess, error) {
 	return mp, nil
 }
 
+// newJobObject is the job-object constructor attachToJob uses. It is a
+// variable only so tests can force the degraded (no job object) path, which
+// can't otherwise be provoked outside a restrictive parent job.
+var newJobObject = NewJobObject
+
 // attachToJob binds the (still suspended) process to a fresh job object, or
 // returns nil after logging a warning when that is impossible.
 func attachToJob(cmd *exec.Cmd) *JobObject {
-	job, err := NewJobObject()
+	job, err := newJobObject()
 	if err != nil {
 		slog.Warn("procutil: job object unavailable, falling back to direct process kill", "error", err)
 		return nil

@@ -108,6 +108,8 @@ func New(cfg *config.Config) (*App, error) {
 		// internal/httpapi/sse_handlers.go.
 		ReadHeaderTimeout: 5 * time.Second,
 	}
+	// All-jobs event streams never end on their own; end them when Shutdown starts.
+	srv.RegisterOnShutdown(api.CloseStreams)
 	return &App{Server: srv, queue: queue}, nil
 }
 

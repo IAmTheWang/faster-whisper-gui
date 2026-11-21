@@ -6,6 +6,8 @@ A local, single-user subtitle transcription tool: Go backend + Vite/TypeScript f
 
 ## Prerequisites
 
+To build from source you need **Go 1.25+** and **[bun](https://bun.sh)** (the frontend's package manager, not npm), on Windows. To just run a built `faster-whisper-gui.exe`, neither is needed — only the three items below.
+
 1. **whisper.cpp (CUDA build)**: download `whisper-cublas-<cuda-version>-bin-x64.zip` from the [whisper.cpp releases](https://github.com/ggml-org/whisper.cpp/releases) page (requires a matching NVIDIA CUDA driver already installed), then unzip `whisper-cli.exe` and its DLLs (`ggml*.dll`, `whisper.dll`, `ggml-cuda.dll`, and the CUDA runtime DLLs) into `bin/whisper/`.
 2. **ffmpeg**: download a Windows build of ffmpeg (including `ffmpeg.exe` + `ffprobe.exe`) into `bin/ffmpeg/`.
 3. **Model files**: download at least one `ggml-*.bin` model (e.g. `ggml-small.bin`) into `models/`.
@@ -49,7 +51,7 @@ Listens on `http://127.0.0.1:8080` by default (loopback only, never exposed to t
 
 ## Usage
 
-1. **Select Media** — browse to one or more video or audio files and check the box next to each one you want transcribed. Selections persist as you navigate between folders. The path field above the file list also accepts typed or pasted paths (e.g. Explorer's "Copy as path") — paste a folder to jump straight there, or a file to jump to its containing folder.
+1. **Select Media** — browse to one or more video or audio files and check the box next to each one you want transcribed. The sort buttons above the list (Name / Type / Modified / Created / Size, click again to reverse; folders always stay first) remember your choice across reloads. Selections persist as you navigate between folders. The path field above the file list also accepts typed or pasted paths (e.g. Explorer's "Copy as path") — paste a folder to jump straight there, or a file to jump to its containing folder.
 2. **Transcription Settings** — pick a model and language once; this configuration is shared by every checked file in the batch (there's no per-file config). Choose the default "same directory as the source file" output, or a custom output directory. Click **Start Transcription** to queue a job for each checked file.
 3. **Progress** — each running or finished job gets its own tab, so you can watch several files' transcriptions at a glance. Jobs still process one at a time under the hood (see [Architecture](#architecture-at-a-glance)); background tabs keep updating live even while you're looking at a different one. Once a job is done, use **Save** to copy that job's `.srt` to another folder, or **Save All Completed** to copy every finished job's `.srt` in the batch to one folder in one click — this is purely an extra copy, the original `.srt` next to the source file (or in your chosen output directory) is written the moment the job finishes either way.
 4. **Job History** — every job ever run this session, click one to reopen (or jump back to) its Progress tab.
@@ -69,11 +71,21 @@ Log lines are prefixed `[go]` for the backend and `[vite]` for the frontend. Ope
 You can still run the two halves manually in separate terminals if you prefer (`cmd/dev` is just these two commands wired together):
 
 ```bash
-# terminal 1
-go run ./cmd/server
+# terminal 1 (run from the repo root; -root is required under `go run`, see below)
+go run ./cmd/server -root .
 # terminal 2
 cd web && bun run dev
 ```
+
+### Troubleshooting: "Environment check failed — ffmpeg/whisper-cli: ... go-build ... cannot find the file specified"
+
+`-root` defaults to the executable's own directory. Under `go run`, the executable is compiled into a temporary directory (`%LOCALAPPDATA%\go-build\...`), so the app looks for `bin\ffmpeg\ffmpeg.exe` and `bin\whisper\whisper-cli.exe` there and can't find them. Fix it with one of:
+
+- Use `go run ./cmd/dev` from the repo root (it defaults `-root` to the current directory).
+- Pass the root explicitly: `go run ./cmd/server -root <repo-root>`.
+- Build first (`go build ./cmd/server`) and run the `.exe` from a directory containing `bin\` and `models\`.
+
+Also make sure `bin\ffmpeg\` and `bin\whisper\` actually contain the binaries — those directories are gitignored and must be populated by hand (see [Prerequisites](#prerequisites)).
 
 ## Testing
 
@@ -90,11 +102,11 @@ CI (`.github/workflows/ci.yml`) runs the same steps on Windows, including `go te
 - **Transcription engine**: whisper.cpp, invoked as a subprocess (`whisper-cli.exe`) rather than Python's faster-whisper — a local single-user Go tool doesn't need a Python/CUDA userland to install.
 - **Media selection**: a server-side file browser (`GET /api/browse`), because a browser's native file picker/drag-and-drop can't hand back an absolute local path, and saving next to the source file by default requires that absolute path.
 - **Batch jobs, serial execution**: you can check and start several video/audio files at once, sharing one model/language/output config, but they're queued and run one at a time — a single GPU can't usefully run concurrent whisper-cli processes. The Progress panel's tabs just let you monitor several jobs' states side by side, not run them in parallel.
-- **Progress reporting**: SSE (`GET /api/jobs/{id}/events`), primarily derived from whisper-cli's own per-segment timestamps, supplemented by its built-in percentage output.
+- **Progress reporting**: SSE — one shared stream for every open job (`GET /api/events`, so many Progress tabs don't exhaust the browser's connection limit; `GET /api/jobs/{id}/events` still serves a single job) — primarily derived from whisper-cli's own per-segment timestamps, supplemented by its built-in percentage output.
 - **Save is additive**: the `.srt` is always written to its real destination the moment a job finishes, exactly as before; "Save"/"Save All Completed" (`POST /api/jobs/{id}/export`) just copies an already-finished job's `.srt` to a second location on demand.
 - **Process robustness**: ffmpeg/whisper-cli subprocesses are managed through a Windows Job Object, so canceling a job (queued or running) or the server itself crashing never leaves an orphaned process behind.
-- **Local-only by design**: the server only listens on loopback, rejects requests with a non-loopback `Host`/`Origin` (DNS rebinding, cross-site POSTs), and refuses UNC/device paths — the API can browse your disk and point the app at executables, so it must not be reachable from a web page you happen to visit.
-- See `CLAUDE.md` for the full design rationale behind each of these.
+- **Local-only by design**: the server only listens on loopback, rejects requests with a non-loopback `Host`/`Origin` (DNS rebinding, cross-site POSTs), requires a per-run secret token (injected into the page it serves) on every `/api` call, sends a same-origin-only CSP, and refuses UNC/device paths — the API can browse your disk and point the app at executables, so it must not be reachable from a web page you happen to visit.
+- See `CLAUDE.md` for the full design rationale behind each of these, and [`docs/go-vs-python-whisper.md`](docs/go-vs-python-whisper.md) for why this is Go + whisper.cpp rather than Python + faster-whisper.
 
 ## Known limitations
 

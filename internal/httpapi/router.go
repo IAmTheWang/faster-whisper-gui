@@ -17,6 +17,7 @@ func (s *Server) RegisterRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("GET /api/jobs", s.handleListJobs)
 	mux.HandleFunc("GET /api/jobs/{id}", s.handleGetJob)
 	mux.HandleFunc("GET /api/jobs/{id}/events", s.handleJobEvents)
+	mux.HandleFunc("GET /api/events", s.handleAllEvents)
 	mux.HandleFunc("POST /api/jobs/{id}/cancel", s.handleCancelJob)
 	mux.HandleFunc("POST /api/jobs/{id}/export", s.handleExportJob)
 	// Anything else under /api/ is a JSON 404 rather than falling through to

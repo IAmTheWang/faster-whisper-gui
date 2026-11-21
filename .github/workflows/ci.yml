@@ -5,10 +5,20 @@ on:
     branches: [main]
   pull_request:
 
+# Least privilege: the workflow only reads the repo.
+permissions:
+  contents: read
+
+# A newer push to the same branch/PR makes the older run pointless.
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
 # Windows only: fsbrowse and procutil call golang.org/x/sys/windows directly.
 jobs:
   build-test:
     runs-on: windows-latest
+    timeout-minutes: 20
     steps:
       - uses: actions/checkout@v4
 
@@ -19,6 +29,13 @@ jobs:
       - uses: oven-sh/setup-bun@v2
         with:
           bun-version-file: web/package.json
+
+      - name: Cache bun packages
+        uses: actions/cache@v4
+        with:
+          path: ~\.bun\install\cache
+          key: bun-${{ runner.os }}-${{ hashFiles('web/bun.lock') }}
+          restore-keys: bun-${{ runner.os }}-
 
       - name: Frontend install
         working-directory: web
@@ -33,6 +50,17 @@ jobs:
         working-directory: web
         run: bun run build
 
+      - name: gofmt
+        run: |
+          $unformatted = gofmt -l .
+          if ($unformatted) {
+            Write-Host "Not gofmt-formatted:`n$unformatted"
+            exit 1
+          }
+
+      - name: go.mod is tidy
+        run: go mod tidy -diff
+
       - name: go vet
         run: go vet ./...
 
@@ -42,4 +70,12 @@ jobs:
         run: go test -race ./...
 
       - name: go build
-        run: go build ./cmd/server
+        run: go build -trimpath -ldflags "-s -w -X main.version=${{ github.sha }}" -o faster-whisper-gui.exe ./cmd/server
+
+      - name: Upload the built exe
+        uses: actions/upload-artifact@v4
+        with:
+          name: faster-whisper-gui-windows
+          path: faster-whisper-gui.exe
+          retention-days: 7
+          if-no-files-found: error

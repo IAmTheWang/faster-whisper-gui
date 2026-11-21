@@ -9,9 +9,10 @@ import (
 // WithMiddleware wraps h with request logging and panic recovery. Apply it
 // once around the whole top-level mux (API routes + embedded static files),
 // not just the API routes, so a panic anywhere still gets a clean 500
-// instead of taking the server down.
+// instead of taking the server down. Recovery sits inside logging, so a
+// panicking request is still logged (as a 500).
 func WithMiddleware(h http.Handler) http.Handler {
-	return recoverMiddleware(loggingMiddleware(securityHeaders(hostGuard(h))))
+	return loggingMiddleware(recoverMiddleware(securityHeaders(hostGuard(h))))
 }
 
 func loggingMiddleware(next http.Handler) http.Handler {
@@ -27,7 +28,17 @@ func recoverMiddleware(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		defer func() {
 			if rec := recover(); rec != nil {
+				// net/http's own convention for "abort this response quietly".
+				if rec == http.ErrAbortHandler {
+					panic(rec)
+				}
 				slog.Error("panic recovered", "error", rec, "path", r.URL.Path)
+				if sw, ok := w.(*statusWriter); ok {
+					if sw.wrote {
+						return // headers are out already; a 500 can no longer be sent
+					}
+					sw.status = http.StatusInternalServerError
+				}
 				http.Error(w, "internal server error", http.StatusInternalServerError)
 			}
 		}()
@@ -38,11 +49,18 @@ func recoverMiddleware(next http.Handler) http.Handler {
 type statusWriter struct {
 	http.ResponseWriter
 	status int
+	wrote  bool // the status line has been sent
 }
 
 func (sw *statusWriter) WriteHeader(code int) {
 	sw.status = code
+	sw.wrote = true
 	sw.ResponseWriter.WriteHeader(code)
+}
+
+func (sw *statusWriter) Write(b []byte) (int, error) {
+	sw.wrote = true // an implicit 200 counts
+	return sw.ResponseWriter.Write(b)
 }
 
 // Unwrap lets http.NewResponseController reach the underlying writer's

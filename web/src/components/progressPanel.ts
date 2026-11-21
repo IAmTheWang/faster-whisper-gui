@@ -1,34 +1,39 @@
-import { api, isTerminalStatus, jobStatusLabels, subscribeJobEvents, type JobStatus } from '../api'
-import { basenameOf, errMsg } from '../dom'
+import { api, isTerminalStatus, jobStatusLabels, subscribeJobEvents, type JobEventHandlers } from '../api'
+import { errMsg, requireEl } from '../dom'
 import { activeTabId, openTabs } from '../state'
 import { mountDirPicker } from './dirPicker'
+import { exportCompleted, summarizeExport } from './progress/exportJobs'
+import {
+  applyCanceled,
+  applyDone,
+  applyError,
+  applyFailure,
+  applyProgress,
+  applySnapshot,
+  isFinished,
+  isNotFound,
+  LOST_CONNECTION,
+  newTabState,
+  UNKNOWN_JOB,
+  type SaveStatus,
+  type TabState,
+} from './progress/tabState'
 
-interface SaveStatus {
-  text: string
-  kind: 'success' | 'error'
-}
-
-interface TabState {
-  status: JobStatus
-  percent: number
-  message: string
-  srtPath?: string
-  error?: string
-  // Kept per tab (not in the DOM) so renderActive() can redraw on every
-  // progress event or tab switch without losing them.
-  saveStatus?: SaveStatus
-  cancelError?: string
-  unsubscribe: () => void
+export interface ProgressPanelHandle {
+  // Unsubscribes from the shared stores and every job's event stream.
+  dispose(): void
 }
 
 // mountProgressPanel keeps one TabState per open Progress tab, independent
 // of which tab is frontmost — this is what lets a backgrounded job keep
-// progressing (SSE stays connected) while another tab is being viewed.
+// progressing (its events keep arriving) while another tab is being viewed.
+// State transitions live in progress/tabState.ts, the export orchestration in
+// progress/exportJobs.ts; this file is only the DOM and the wiring.
 export function mountProgressPanel(
   root: HTMLElement,
   onJobFinished: () => void,
   onJobProgress: () => void = () => {},
-): void {
+): ProgressPanelHandle {
   root.innerHTML = `
     <div class="panel">
       <h2>Progress</h2>
@@ -36,10 +41,10 @@ export function mountProgressPanel(
       <div class="progress-empty">No job started yet</div>
       <div class="progress-active" role="tabpanel" hidden>
         <div class="progress-bar" role="progressbar" aria-label="Job progress" aria-valuemin="0" aria-valuemax="100" aria-valuenow="0"><div class="progress-bar-fill"></div></div>
-        <div class="progress-stage"></div>
+        <div class="progress-stage" aria-live="polite"></div>
         <div class="progress-message"></div>
         <button type="button" class="btn-secondary cancel-btn">Cancel</button>
-        <div class="progress-result"></div>
+        <div class="progress-result" aria-live="polite"></div>
         <div class="progress-save-actions">
           <button type="button" class="btn-secondary save-btn">Save</button>
           <button type="button" class="btn-secondary save-all-btn">Save All Completed</button>
@@ -50,22 +55,22 @@ export function mountProgressPanel(
     </div>
   `
 
-  const tabStrip = root.querySelector<HTMLDivElement>('.progress-tabs')!
-  const empty = root.querySelector<HTMLDivElement>('.progress-empty')!
-  const active = root.querySelector<HTMLDivElement>('.progress-active')!
+  const tabStrip = requireEl<HTMLDivElement>(root, '.progress-tabs')
+  const empty = requireEl<HTMLDivElement>(root, '.progress-empty')
+  const active = requireEl<HTMLDivElement>(root, '.progress-active')
   const panelId = 'progress-panel-active'
   active.id = panelId
-  const fill = root.querySelector<HTMLDivElement>('.progress-bar-fill')!
-  const stageEl = root.querySelector<HTMLDivElement>('.progress-stage')!
-  const messageEl = root.querySelector<HTMLDivElement>('.progress-message')!
-  const cancelBtn = root.querySelector<HTMLButtonElement>('.cancel-btn')!
-  const resultEl = root.querySelector<HTMLDivElement>('.progress-result')!
-  const saveBtn = root.querySelector<HTMLButtonElement>('.save-btn')!
-  const saveAllBtn = root.querySelector<HTMLButtonElement>('.save-all-btn')!
-  const saveStatusEl = root.querySelector<HTMLDivElement>('.save-status')!
+  const fill = requireEl<HTMLDivElement>(root, '.progress-bar-fill')
+  const progressBar = requireEl<HTMLDivElement>(root, '.progress-bar')
+  const stageEl = requireEl<HTMLDivElement>(root, '.progress-stage')
+  const messageEl = requireEl<HTMLDivElement>(root, '.progress-message')
+  const cancelBtn = requireEl<HTMLButtonElement>(root, '.cancel-btn')
+  const resultEl = requireEl<HTMLDivElement>(root, '.progress-result')
+  const saveBtn = requireEl<HTMLButtonElement>(root, '.save-btn')
+  const saveAllBtn = requireEl<HTMLButtonElement>(root, '.save-all-btn')
+  const saveStatusEl = requireEl<HTMLDivElement>(root, '.save-status')
 
-  const picker = mountDirPicker(root.querySelector<HTMLDivElement>('.picker-mount')!)
-  const progressBar = root.querySelector<HTMLDivElement>('.progress-bar')!
+  const picker = mountDirPicker(requireEl<HTMLDivElement>(root, '.picker-mount'))
 
   const jobStates = new Map<string, TabState>()
   // True while an export is running, so Save buttons can't double-fire.
@@ -75,19 +80,35 @@ export function mountProgressPanel(
     saveAllBtn.disabled = exporting || ![...jobStates.values()].some((s) => s.status === 'done')
   }
 
+  // ---- tab strip ----------------------------------------------------------
+
+  // The strip is only rebuilt when something it shows changed.
+  let tabsSignature = ''
+  // A tab that should take keyboard focus on the next rebuild (arrow keys).
+  let pendingFocusId: string | undefined
+
   function renderTabs(): void {
     const tabs = openTabs.get()
     const activeId = activeTabId.get()
+    const signature = `${activeId ?? ''}|${tabs.map((t) => `${t.id}:${t.mediaName}`).join('|')}`
+    if (signature === tabsSignature && pendingFocusId === undefined) return
+    tabsSignature = signature
+
     // The strip is rebuilt wholesale; keep keyboard focus on the same tab.
     const focused = document.activeElement as HTMLElement | null
     const focusedTabId =
-      focused && focused.classList.contains('progress-tab-label') && tabStrip.contains(focused)
+      pendingFocusId ??
+      (focused && focused.classList.contains('progress-tab-label') && tabStrip.contains(focused)
         ? focused.dataset.tabId
-        : undefined
+        : undefined)
+    pendingFocusId = undefined
     let toFocus: HTMLElement | null = null
     let activeLabel: HTMLElement | null = null
 
-    tabStrip.innerHTML = ''
+    const frag = document.createDocumentFragment()
+    // Roving tabindex: only the selected tab is in the Tab order; arrow keys
+    // move between tabs. With nothing selected, the first tab stays reachable.
+    const tabbableId = tabs.some((t) => t.id === activeId) ? activeId : tabs[0]?.id
     for (const tab of tabs) {
       const isActive = tab.id === activeId
       const wrap = document.createElement('div')
@@ -99,33 +120,31 @@ export function mountProgressPanel(
       label.className = 'progress-tab-label'
       label.setAttribute('role', 'tab')
       label.setAttribute('aria-selected', String(isActive))
+      label.tabIndex = tab.id === tabbableId ? 0 : -1
       label.dataset.tabId = tab.id
       label.id = `progress-tab-${tab.id}`
       label.setAttribute('aria-controls', panelId)
       label.textContent = tab.mediaName
       label.title = `${tab.mediaName} (press Delete to close)`
-      label.addEventListener('click', () => activeTabId.set(tab.id))
-      // The × is mouse-only (aria-hidden, not focusable) so the tablist only
-      // contains tabs; keyboard users close a tab with Delete instead.
-      label.addEventListener('keydown', (e) => {
-        if (e.key === 'Delete') closeTab(tab.id)
-      })
       wrap.appendChild(label)
       if (isActive) activeLabel = label
 
+      // The × is mouse-only (aria-hidden, not focusable) so the tablist only
+      // contains tabs; keyboard users close a tab with Delete instead.
       const close = document.createElement('button')
       close.type = 'button'
       close.className = 'progress-tab-close'
+      close.dataset.tabId = tab.id
       close.setAttribute('aria-hidden', 'true')
       close.tabIndex = -1
       close.title = `Close ${tab.mediaName}`
       close.textContent = '×'
-      close.addEventListener('click', () => closeTab(tab.id))
       wrap.appendChild(close)
 
-      tabStrip.appendChild(wrap)
+      frag.appendChild(wrap)
       if (tab.id === focusedTabId) toFocus = label
     }
+    tabStrip.replaceChildren(frag)
     // If the focused tab was just closed, move focus to the now-active tab
     // instead of letting it fall back to <body>.
     const focusLost = focusedTabId !== undefined && !toFocus
@@ -133,6 +152,50 @@ export function mountProgressPanel(
     if (activeLabel) active.setAttribute('aria-labelledby', (activeLabel as HTMLElement).id)
     else active.removeAttribute('aria-labelledby')
   }
+
+  // One set of listeners for the whole strip (it is rebuilt often).
+  tabStrip.addEventListener('click', (e) => {
+    const target = e.target as HTMLElement
+    const close = target.closest<HTMLElement>('.progress-tab-close')
+    if (close?.dataset.tabId) return closeTab(close.dataset.tabId)
+    const id = target.closest<HTMLElement>('.progress-tab-label')?.dataset.tabId
+    if (id) activeTabId.set(id)
+  })
+  tabStrip.addEventListener('keydown', (e) => {
+    const label = (e.target as HTMLElement).closest<HTMLElement>('.progress-tab-label')
+    const id = label?.dataset.tabId
+    if (!id) return
+    if (e.key === 'Delete') {
+      closeTab(id)
+      return
+    }
+    const tabs = openTabs.get()
+    const idx = tabs.findIndex((t) => t.id === id)
+    let next: number
+    switch (e.key) {
+      case 'ArrowRight':
+        next = (idx + 1) % tabs.length
+        break
+      case 'ArrowLeft':
+        next = (idx - 1 + tabs.length) % tabs.length
+        break
+      case 'Home':
+        next = 0
+        break
+      case 'End':
+        next = tabs.length - 1
+        break
+      default:
+        return
+    }
+    const nextId = tabs[next]?.id
+    if (!nextId) return
+    e.preventDefault()
+    pendingFocusId = nextId
+    activeTabId.set(nextId)
+  })
+
+  // ---- active tab ---------------------------------------------------------
 
   function renderActive(): void {
     const id = activeTabId.get()
@@ -151,8 +214,7 @@ export function mountProgressPanel(
     stageEl.textContent = jobStatusLabels[state.status] ?? state.status
     messageEl.textContent = state.message
 
-    const terminal = isTerminalStatus(state.status)
-    cancelBtn.hidden = terminal
+    cancelBtn.hidden = isTerminalStatus(state.status)
     saveBtn.disabled = exporting || state.status !== 'done'
     saveStatusEl.textContent = state.saveStatus?.text ?? ''
     saveStatusEl.className = state.saveStatus ? `save-status ${state.saveStatus.kind}` : 'save-status'
@@ -175,103 +237,102 @@ export function mountProgressPanel(
     }
   }
 
+  function repaint(id: string): void {
+    if (activeTabId.get() === id) renderActive()
+    updateSaveAllButton()
+  }
+
   function closeTab(id: string): void {
     const wasActive = activeTabId.get() === id
     openTabs.set(openTabs.get().filter((t) => t.id !== id))
     if (wasActive) {
       const remaining = openTabs.get()
-      activeTabId.set(remaining.length > 0 ? remaining[0].id : null)
+      activeTabId.set(remaining[0]?.id ?? null)
     }
   }
 
-  async function openTab(id: string): Promise<void> {
-    if (jobStates.has(id)) return
-    // Placeholder so a second call (before the fetch below resolves) is a
-    // no-op, and so closing the tab mid-fetch can be detected on resume.
-    jobStates.set(id, { status: 'queued', percent: 0, message: '', unsubscribe: () => {} })
+  // ---- job lifecycle ------------------------------------------------------
 
-    const placeholder = jobStates.get(id)!
-    let job: Awaited<ReturnType<typeof api.job>>
+  // sync fetches the job's current state and applies it — on opening a tab, and
+  // whenever the event stream (re)connects, since events sent while it was down
+  // are gone. A snapshot older than a live event that arrived meanwhile is
+  // dropped (tabState's `events` counter), so it can never roll progress back.
+  async function sync(id: string, state: TabState): Promise<void> {
+    const eventsBefore = state.events
+    // Only a job seen unfinished that is now finished counts as "just finished";
+    // opening a tab for an old job must not trigger a history refresh.
+    const justFinishedCandidate = state.synced && !isFinished(state)
     try {
-      job = await api.job(id)
+      const job = await api.job(id)
+      // Identity, not just presence: the tab may have been closed and reopened
+      // while the fetch was in flight, and the reopened tab owns its own state.
+      if (jobStates.get(id) !== state || state.events !== eventsBefore) return
+      applySnapshot(state, job)
     } catch (err) {
-      // Show why the tab is empty; closing and reopening the tab retries.
-      if (jobStates.get(id) === placeholder) {
-        placeholder.status = 'failed'
-        placeholder.error = `Could not load job: ${errMsg(err)}`
-        if (activeTabId.get() === id) renderActive()
+      if (jobStates.get(id) !== state) return
+      if (!state.synced) {
+        // Show why the tab is empty; closing and reopening the tab retries.
+        applyFailure(state, `Could not load job: ${errMsg(err)}`)
+        state.unsubscribe()
+      } else if (isNotFound(err)) {
+        applyFailure(state, UNKNOWN_JOB)
+        state.unsubscribe()
+      } else {
+        console.warn('could not refresh job', id, err)
       }
-      return
     }
-    // Identity, not just presence: the tab may have been closed and reopened
-    // while the fetch was in flight, and the reopened tab owns its own fetch.
-    const state = jobStates.get(id)
-    if (!state || state !== placeholder) return
+    if (isFinished(state)) {
+      state.unsubscribe() // nothing more will come for a finished job
+      if (justFinishedCandidate) onJobFinished()
+    }
+    repaint(id)
+  }
 
-    state.status = job.status
-    state.percent = job.percent
-    state.message = job.message ?? ''
-    state.srtPath = job.srtPath
-    state.error = job.error
-    state.unsubscribe = subscribeJobEvents(id, {
+  function openTab(id: string): void {
+    if (jobStates.has(id)) return
+    const state = newTabState()
+    jobStates.set(id, state)
+
+    const finish = (): void => {
+      repaint(id)
+      onJobFinished()
+    }
+    const handlers: JobEventHandlers = {
       onProgress: (data) => {
-        state.status = data.stage
-        state.percent = data.percent
-        state.message = data.message ?? ''
-        if (activeTabId.get() === id) renderActive()
+        applyProgress(state, data)
+        repaint(id)
         onJobProgress()
       },
       onDone: (data) => {
-        state.status = 'done'
-        state.percent = 100
-        state.srtPath = data.srtPath
-        if (activeTabId.get() === id) renderActive()
-        updateSaveAllButton()
-        onJobFinished()
+        applyDone(state, data)
+        finish()
       },
       onError: (data) => {
-        state.status = 'failed'
-        state.error = data.message
-        if (activeTabId.get() === id) renderActive()
-        onJobFinished()
+        applyError(state, data)
+        finish()
       },
       onCanceled: () => {
-        state.status = 'canceled'
-        if (activeTabId.get() === id) renderActive()
-        onJobFinished()
+        applyCanceled(state)
+        finish()
       },
+      // Fires when the shared stream opens or reconnects: also covers the very
+      // first load of this tab, so there is no separate initial fetch.
+      onSync: () => void sync(id, state),
       onDisconnect: () => {
-        // Resync from the server; if the job is gone (server restarted) or
-        // still unfinished with no stream, say so instead of hanging.
-        api
-          .job(id)
-          .then((j) => {
-            state.status = j.status
-            state.percent = j.percent
-            state.srtPath = j.srtPath
-            state.error = j.error
-            if (!isTerminalStatus(j.status)) {
-              state.status = 'failed'
-              state.error = 'Lost connection to the server while the job was running.'
-            }
-          })
-          .catch(() => {
-            state.status = 'failed'
-            state.error = 'The server no longer knows this job (it may have been restarted).'
-          })
-          .finally(() => {
-            if (activeTabId.get() === id) renderActive()
-            updateSaveAllButton()
-            onJobFinished()
-          })
+        // The stream is gone for good: resync once, and if the job is still
+        // unfinished with nothing left to tell us, say so instead of hanging.
+        void sync(id, state).then(() => {
+          if (jobStates.get(id) !== state || isFinished(state)) return
+          applyFailure(state, LOST_CONNECTION)
+          finish()
+        })
       },
-    })
-
-    if (activeTabId.get() === id) renderActive()
-    updateSaveAllButton()
+    }
+    state.unsubscribe = subscribeJobEvents(id, handlers)
+    repaint(id)
   }
 
-  openTabs.subscribe((tabs) => {
+  const unsubscribeTabs = openTabs.subscribe((tabs) => {
     const ids = new Set(tabs.map((t) => t.id))
     for (const [id, state] of jobStates) {
       if (!ids.has(id)) {
@@ -286,7 +347,7 @@ export function mountProgressPanel(
     updateSaveAllButton()
   })
 
-  activeTabId.subscribe(() => {
+  const unsubscribeActive = activeTabId.subscribe(() => {
     renderTabs()
     renderActive()
   })
@@ -306,6 +367,8 @@ export function mountProgressPanel(
       cancelBtn.disabled = false
     }
   })
+
+  // ---- saving a copy elsewhere --------------------------------------------
 
   function setSaveStatus(id: string, status: SaveStatus): void {
     const state = jobStates.get(id)
@@ -333,43 +396,21 @@ export function mountProgressPanel(
     }
   }
 
-  // Exports every completed tab one at a time. Two jobs whose .srt files share
-  // a basename would overwrite each other in one folder, so the later one is
-  // skipped and reported instead. The summary is shown on statusTargetId (the
-  // tab that was frontmost when the picker was opened).
+  // The summary is shown on statusTargetId (the tab that was frontmost when the
+  // picker was opened).
   async function exportAll(statusTargetId: string, destDir: string): Promise<void> {
-    const doneTabs = openTabs.get().filter((t) => jobStates.get(t.id)?.status === 'done')
     setExporting(true)
-    const problems: string[] = []
-    const claimed = new Map<string, string>() // lower-cased basename -> media name that took it
-    let succeeded = 0
     try {
-      for (const tab of doneTabs) {
-        const srtPath = jobStates.get(tab.id)?.srtPath
-        const base = srtPath ? basenameOf(srtPath).toLowerCase() : ''
-        const owner = base ? claimed.get(base) : undefined
-        if (owner !== undefined) {
-          problems.push(`${tab.mediaName}: skipped, "${basenameOf(srtPath!)}" would overwrite the copy from ${owner}`)
-          continue
-        }
-        try {
-          await api.exportJob(tab.id, destDir)
-          if (base) claimed.set(base, tab.mediaName)
-          succeeded++
-        } catch (err) {
-          problems.push(`${tab.mediaName}: ${errMsg(err)}`)
-        }
-      }
+      const outcome = await exportCompleted(
+        (id, dir) => api.exportJob(id, dir),
+        openTabs.get(),
+        (id) => jobStates.get(id),
+        destDir,
+      )
+      setSaveStatus(statusTargetId, summarizeExport(outcome))
     } finally {
       setExporting(false)
     }
-    setSaveStatus(statusTargetId, {
-      text:
-        problems.length === 0
-          ? `Saved ${succeeded}/${doneTabs.length}`
-          : `Saved ${succeeded}/${doneTabs.length} — ${problems.join('; ')}`,
-      kind: problems.length === 0 ? 'success' : 'error',
-    })
   }
 
   // The job (or status-target tab) is captured here, when the picker is
@@ -392,4 +433,13 @@ export function mountProgressPanel(
 
   saveBtn.addEventListener('click', () => openSavePicker('single'))
   saveAllBtn.addEventListener('click', () => openSavePicker('all'))
+
+  return {
+    dispose() {
+      unsubscribeTabs()
+      unsubscribeActive()
+      for (const state of jobStates.values()) state.unsubscribe()
+      jobStates.clear()
+    },
+  }
 }

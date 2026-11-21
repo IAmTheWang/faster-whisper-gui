@@ -1,50 +1,25 @@
 import { api, type Entry } from '../api'
-import { dirnameOf, errMsg, escapeHtml, makeActivatable, stripSurroundingQuotes } from '../dom'
+import {
+  delegateActivate,
+  dirnameOf,
+  errMsg,
+  markActivatable,
+  requireEl,
+  stripSurroundingQuotes,
+} from '../dom'
 import { selectedMedia } from '../state'
-
-type SortKey = 'name' | 'type' | 'modTime' | 'createdTime' | 'size'
-type SortDir = 'asc' | 'desc'
-
-const SORT_KEYS: SortKey[] = ['name', 'type', 'modTime', 'createdTime', 'size']
-const SORT_LABELS: Record<SortKey, string> = {
-  name: 'Name',
-  type: 'Type',
-  modTime: 'Modified',
-  createdTime: 'Created',
-  size: 'Size',
-}
-const SORT_STORAGE_KEY = 'directoryBrowser.sort'
-
-function defaultDirFor(key: SortKey): SortDir {
-  return key === 'modTime' || key === 'createdTime' ? 'desc' : 'asc'
-}
-
-function loadStoredSort(): { key: SortKey; dir: SortDir } | null {
-  try {
-    const raw = localStorage.getItem(SORT_STORAGE_KEY)
-    if (!raw) return null
-    const parsed = JSON.parse(raw) as { key?: string; dir?: string }
-    if (!parsed.key || !SORT_KEYS.includes(parsed.key as SortKey)) return null
-    if (parsed.dir !== 'asc' && parsed.dir !== 'desc') return null
-    return { key: parsed.key as SortKey, dir: parsed.dir }
-  } catch {
-    return null
-  }
-}
-
-function storeSort(key: SortKey, dir: SortDir): void {
-  try {
-    localStorage.setItem(SORT_STORAGE_KEY, JSON.stringify({ key, dir }))
-  } catch {
-    // ignore (e.g. private browsing quota)
-  }
-}
-
-function compareByName(a: Entry, b: Entry): number {
-  const nameA = a.name.toLowerCase()
-  const nameB = b.name.toLowerCase()
-  return nameA < nameB ? -1 : nameA > nameB ? 1 : 0
-}
+import {
+  compareEntries,
+  defaultDirFor,
+  isSortKey,
+  loadStoredSort,
+  SORT_KEYS,
+  SORT_LABELS,
+  storeSort,
+  type SortDir,
+  type SortKey,
+} from './entrySort'
+import { createEntryLabel, renderListEmpty, renderListError, Sequencer } from './listing'
 
 function toggleSelection(entry: Entry): void {
   const current = selectedMedia.get()
@@ -74,7 +49,7 @@ export function mountDirectoryBrowser(root: HTMLElement): void {
           <div class="sort-controls">
             ${SORT_KEYS.map(
               (key) =>
-                `<button type="button" class="sort-option" data-key="${key}">${SORT_LABELS[key]}<span class="sort-arrow" aria-hidden="true"></span></button>`,
+                `<button type="button" class="sort-option" data-key="${key}" aria-pressed="false">${SORT_LABELS[key]}<span class="sort-arrow" aria-hidden="true"></span></button>`,
             ).join('')}
           </div>
           <button type="button" class="btn-link refresh-btn" aria-label="Refresh" title="Refresh" disabled>⟳</button>
@@ -84,57 +59,36 @@ export function mountDirectoryBrowser(root: HTMLElement): void {
     </div>
   `
 
-  const driveInput = root.querySelector<HTMLInputElement>('.drive-select')!
-  const sortControls = root.querySelector<HTMLDivElement>('.sort-controls')!
-  const refreshBtn = root.querySelector<HTMLButtonElement>('.refresh-btn')!
-  const selectionCount = root.querySelector<HTMLSpanElement>('.selection-count')!
-  const clearSelectionBtn = root.querySelector<HTMLButtonElement>('.clear-selection')!
-  const breadcrumb = root.querySelector<HTMLDivElement>('.breadcrumb')!
-  const entryList = root.querySelector<HTMLUListElement>('.entry-list')!
+  const driveInput = requireEl<HTMLInputElement>(root, '.drive-select')
+  const sortControls = requireEl<HTMLDivElement>(root, '.sort-controls')
+  const refreshBtn = requireEl<HTMLButtonElement>(root, '.refresh-btn')
+  const selectionCount = requireEl<HTMLSpanElement>(root, '.selection-count')
+  const clearSelectionBtn = requireEl<HTMLButtonElement>(root, '.clear-selection')
+  const breadcrumb = requireEl<HTMLDivElement>(root, '.breadcrumb')
+  const entryList = requireEl<HTMLUListElement>(root, '.entry-list')
 
   let currentEntries: Entry[] = []
   let currentPath = ''
-  const storedSort = loadStoredSort()
+  // The rows currently shown, by path: the delegated handlers look entries up
+  // here instead of every row closing over its own.
+  let entriesByPath = new Map<string, Entry>()
+  const storedSort = loadStoredSort(localStorage)
   let sortKey: SortKey = storedSort?.key ?? 'name'
   let sortDir: SortDir = storedSort?.dir ?? 'asc'
 
-  function compareEntries(a: Entry, b: Entry): number {
-    if (a.type === 'dir' && b.type !== 'dir') return -1
-    if (a.type !== 'dir' && b.type === 'dir') return 1
-
-    let cmp: number
-    switch (sortKey) {
-      case 'type':
-        cmp = a.type < b.type ? -1 : a.type > b.type ? 1 : compareByName(a, b)
-        break
-      case 'modTime':
-        cmp = a.modTime - b.modTime || compareByName(a, b)
-        break
-      case 'createdTime':
-        cmp = a.createdTime - b.createdTime || compareByName(a, b)
-        break
-      case 'size':
-        cmp = a.size - b.size || compareByName(a, b)
-        break
-      default:
-        cmp = compareByName(a, b)
-    }
-    return sortDir === 'asc' ? cmp : -cmp
-  }
-
   function updateSortControlsUI(): void {
     sortControls.querySelectorAll<HTMLButtonElement>('.sort-option').forEach((btn) => {
-      const key = btn.dataset.key as SortKey
+      const key = btn.dataset.key
+      if (!isSortKey(key)) return
       const isActive = key === sortKey
-      const arrow = btn.querySelector<HTMLSpanElement>('.sort-arrow')!
+      const arrow = requireEl<HTMLSpanElement>(btn, '.sort-arrow')
       btn.classList.toggle('active', isActive)
+      btn.setAttribute('aria-pressed', String(isActive))
       if (isActive) {
         const ascending = sortDir === 'asc'
-        btn.setAttribute('aria-sort', ascending ? 'ascending' : 'descending')
         btn.setAttribute('aria-label', `Sort by ${SORT_LABELS[key]}, ${ascending ? 'ascending' : 'descending'}`)
         arrow.textContent = ascending ? '↑' : '↓'
       } else {
-        btn.removeAttribute('aria-sort')
         btn.setAttribute('aria-label', `Sort by ${SORT_LABELS[key]}`)
         arrow.textContent = ''
       }
@@ -143,33 +97,30 @@ export function mountDirectoryBrowser(root: HTMLElement): void {
 
   clearSelectionBtn.addEventListener('click', () => selectedMedia.set([]))
 
-  function showListError(message: string): void {
-    entryList.innerHTML = `<li class="entry-error" role="alert">${escapeHtml(message)}</li>`
-  }
-
   async function loadDrives(): Promise<void> {
     const drives = await api.drives()
-    if (drives.length === 0) {
-      showListError('No drives found')
+    const firstDrive = drives[0]
+    if (!firstDrive) {
+      renderListError(entryList, 'No drives found')
       return
     }
 
     const settings = await api.settings().catch(() => null)
     const defaultDir = settings?.defaultVideoDir
-    const startDrive = defaultDir ? drives.find((d) => defaultDir.toUpperCase().startsWith(d.name.toUpperCase())) : undefined
-    driveInput.value = defaultDir || (startDrive ?? drives[0]).name
-    await navigate(defaultDir || drives[0].name)
+    if (defaultDir && (await navigate(defaultDir)) === null) return
+    // No default directory, or it can't be listed (moved, drive unplugged):
+    // start at the first drive rather than leaving the user on an error.
+    await navigate(firstDrive.name)
   }
 
-  // Monotonic counter: a slower, earlier response must never overwrite a
-  // newer navigation's listing.
-  let navSeq = 0
+  // A slower, earlier response must never overwrite a newer navigation's listing.
+  const navSeq = new Sequencer()
 
   async function navigate(path: string): Promise<Error | null> {
-    const mySeq = ++navSeq
+    const ticket = navSeq.next()
     try {
       const listing = await api.browse(path)
-      if (mySeq !== navSeq) return null
+      if (!navSeq.isCurrent(ticket)) return null
       currentPath = listing.path
       driveInput.value = listing.path
       refreshBtn.disabled = false
@@ -177,9 +128,9 @@ export function mountDirectoryBrowser(root: HTMLElement): void {
       renderEntries(listing.entries)
       return null
     } catch (err) {
-      if (mySeq !== navSeq) return null
+      if (!navSeq.isCurrent(ticket)) return null
       const error = err instanceof Error ? err : new Error(String(err))
-      showListError(error.message)
+      renderListError(entryList, error.message)
       driveInput.value = currentPath
       return error
     }
@@ -217,55 +168,62 @@ export function mountDirectoryBrowser(root: HTMLElement): void {
   }
 
   function renderSortedEntries(): void {
-    const entries = [...currentEntries].sort(compareEntries)
+    const entries = [...currentEntries].sort(compareEntries(sortKey, sortDir))
+    entriesByPath = new Map(entries.map((e) => [e.path, e]))
     entryList.innerHTML = ''
     if (entries.length === 0) {
-      entryList.innerHTML = '<li class="entry-empty">(empty)</li>'
+      renderListEmpty(entryList)
       return
     }
 
     const selectedPaths = new Set(selectedMedia.get().map((e) => e.path))
+    const rows = document.createDocumentFragment()
     for (const entry of entries) {
       const li = document.createElement('li')
       li.className = `entry entry-${entry.type}`
       li.dataset.path = entry.path
 
-      const isMedia = entry.type === 'video' || entry.type === 'audio'
-      if (isMedia) {
+      if (entry.type === 'video' || entry.type === 'audio') {
         li.classList.add('entry-media')
         const checkbox = document.createElement('input')
         checkbox.type = 'checkbox'
         checkbox.className = 'media-checkbox'
         checkbox.setAttribute('aria-label', `Select ${entry.name}`)
         checkbox.checked = selectedPaths.has(entry.path)
-        checkbox.addEventListener('click', (e) => e.stopPropagation())
-        checkbox.addEventListener('change', () => toggleSelection(entry))
         li.appendChild(checkbox)
         if (checkbox.checked) li.classList.add('selected')
-      }
-
-      const label = document.createElement('span')
-      const icon = entry.type === 'dir' ? '📁' : entry.type === 'audio' ? '🎵' : '🎬'
-      label.textContent = `${icon} ${entry.name}`
-      li.appendChild(label)
-
-      const activate = (): void => {
-        if (entry.type === 'dir') {
-          navigate(entry.path)
-        } else {
-          toggleSelection(entry)
-        }
-      }
-      if (isMedia) {
-        // The checkbox is the focusable control (native semantics); the row
-        // click is a mouse convenience on top of it.
-        li.addEventListener('click', activate)
       } else {
-        makeActivatable(li, activate)
+        // The checkbox is the focusable control on media rows (native
+        // semantics); a folder row is itself the button.
+        markActivatable(li)
       }
-      entryList.appendChild(li)
+      li.appendChild(createEntryLabel(entry))
+      rows.appendChild(li)
     }
+    entryList.appendChild(rows)
   }
+
+  // One set of listeners for the whole list, however many rows it has. A click
+  // on a media row's checkbox is left to its own change event so it can't
+  // toggle twice.
+  delegateActivate(
+    entryList,
+    '.entry',
+    (li) => {
+      const entry = li.dataset.path ? entriesByPath.get(li.dataset.path) : undefined
+      if (!entry) return
+      if (entry.type === 'dir') void navigate(entry.path)
+      else toggleSelection(entry)
+    },
+    '.media-checkbox',
+  )
+  entryList.addEventListener('change', (e) => {
+    const target = e.target as HTMLElement
+    if (!target.matches('.media-checkbox')) return
+    const path = target.closest<HTMLElement>('.entry')?.dataset.path
+    const entry = path ? entriesByPath.get(path) : undefined
+    if (entry) toggleSelection(entry)
+  })
 
   driveInput.addEventListener('paste', () => setTimeout(() => navigateToPastedPath(driveInput.value), 0))
   driveInput.addEventListener('keydown', (e) => {
@@ -279,15 +237,15 @@ export function mountDirectoryBrowser(root: HTMLElement): void {
 
   sortControls.addEventListener('click', (e) => {
     const btn = (e.target as HTMLElement).closest<HTMLButtonElement>('.sort-option')
-    if (!btn) return
-    const key = btn.dataset.key as SortKey
+    const key = btn?.dataset.key
+    if (!isSortKey(key)) return
     if (key === sortKey) {
       sortDir = sortDir === 'asc' ? 'desc' : 'asc'
     } else {
       sortKey = key
       sortDir = defaultDirFor(key)
     }
-    storeSort(sortKey, sortDir)
+    storeSort(localStorage, sortKey, sortDir)
     updateSortControlsUI()
     renderSortedEntries()
   })
@@ -319,5 +277,5 @@ export function mountDirectoryBrowser(root: HTMLElement): void {
   })
 
   updateSortControlsUI()
-  loadDrives().catch((err) => showListError(`Could not load drives: ${errMsg(err)}`))
+  loadDrives().catch((err) => renderListError(entryList, `Could not load drives: ${errMsg(err)}`))
 }

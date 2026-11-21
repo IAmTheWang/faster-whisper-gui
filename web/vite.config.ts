@@ -26,5 +26,9 @@ export default defineConfig({
   build: {
     outDir: '../internal/webui/dist',
     emptyOutDir: true,
+    // The bundle is embedded in the Go binary: skip source maps (they would
+    // only bloat the exe) and the gzip-size report (it slows every build).
+    sourcemap: false,
+    reportCompressedSize: false,
   },
 })

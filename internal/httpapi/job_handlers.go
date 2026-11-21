@@ -3,7 +3,9 @@ package httpapi
 import (
 	"errors"
 	"fmt"
+	"io/fs"
 	"net/http"
+	"os"
 	"path/filepath"
 	"regexp"
 	"strings"
@@ -216,7 +218,14 @@ func (s *Server) handleExportJob(w http.ResponseWriter, r *http.Request) {
 
 	destPath := filepath.Join(destDir, filepath.Base(j.SRTPath))
 	if err := fsbrowse.CopyFile(j.SRTPath, destPath); err != nil {
-		writeErrorMsg(w, http.StatusConflict, "could not copy subtitle file: "+err.Error())
+		// The source being gone is a "not found"; anything else (destination
+		// permissions, disk full) is a failure on this machine, not a conflict
+		// with the client's request.
+		status := http.StatusInternalServerError
+		if _, statErr := os.Stat(j.SRTPath); errors.Is(statErr, fs.ErrNotExist) {
+			status = http.StatusNotFound
+		}
+		writeErrorMsg(w, status, "could not copy subtitle file: "+err.Error())
 		return
 	}
 

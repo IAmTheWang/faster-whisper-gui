@@ -1,13 +1,13 @@
 import './styles.css'
 import { api } from './api'
-import { errMsg } from './dom'
+import { errMsg, requireEl } from './dom'
 import { mountDirectoryBrowser } from './components/directoryBrowser'
 import { mountJobConfigPanel } from './components/jobConfigPanel'
 import { mountJobHistory } from './components/jobHistory'
 import { mountProgressPanel } from './components/progressPanel'
 import { mountSettingsPanel } from './components/settingsPanel'
 
-const app = document.querySelector<HTMLDivElement>('#app')!
+const app = requireEl<HTMLDivElement>(document, '#app')
 app.innerHTML = `
   <header class="app-header">
     <h1>faster-whisper-gui</h1>
@@ -24,12 +24,12 @@ app.innerHTML = `
   </main>
 `
 
-const healthBanner = app.querySelector<HTMLDivElement>('.health-banner')!
-const browserColumn = app.querySelector<HTMLElement>('.browser-column')!
-const settingsColumn = app.querySelector<HTMLElement>('.settings-column')!
-const configColumn = app.querySelector<HTMLElement>('.config-column')!
-const progressColumn = app.querySelector<HTMLElement>('.progress-column')!
-const historyColumn = app.querySelector<HTMLElement>('.history-column')!
+const healthBanner = requireEl<HTMLDivElement>(app, '.health-banner')
+const browserColumn = requireEl<HTMLElement>(app, '.browser-column')
+const settingsColumn = requireEl<HTMLElement>(app, '.settings-column')
+const configColumn = requireEl<HTMLElement>(app, '.config-column')
+const progressColumn = requireEl<HTMLElement>(app, '.progress-column')
+const historyColumn = requireEl<HTMLElement>(app, '.history-column')
 
 async function checkHealth(): Promise<void> {
   try {
@@ -53,7 +53,7 @@ async function checkHealth(): Promise<void> {
 const jobHistory = mountJobHistory(historyColumn)
 mountDirectoryBrowser(browserColumn)
 const jobConfigPanel = mountJobConfigPanel(configColumn, () => jobHistory.refresh())
-mountProgressPanel(
+const progressPanel = mountProgressPanel(
   progressColumn,
   () => jobHistory.refresh(),
   () => jobHistory.refreshThrottled(),
@@ -65,3 +65,10 @@ mountSettingsPanel(settingsColumn, () => {
 })
 
 checkHealth()
+
+// Dev-server hot reload re-runs this module; tear the old panels down first so
+// their store subscriptions and the shared event stream don't pile up.
+import.meta.hot?.dispose(() => {
+  progressPanel.dispose()
+  jobHistory.dispose()
+})

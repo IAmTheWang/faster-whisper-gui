@@ -85,14 +85,29 @@ func ProbeDuration(ctx context.Context, ffprobePath, mediaPath string) (time.Dur
 		return 0, fmt.Errorf("ffprobe failed: %w: %s", err, lastLines(stderr.String(), 20))
 	}
 
-	seconds, err := strconv.ParseFloat(strings.TrimSpace(stdout.String()), 64)
+	return parseDuration(stdout.String())
+}
+
+// parseDuration turns ffprobe's bare-float stdout (seconds, surrounding
+// whitespace allowed) into a time.Duration. NaN, +/-Inf, zero, negative and
+// non-numeric output are all rejected — a "duration" that can't be used as a
+// progress denominator is an error, not a silent zero.
+func parseDuration(out string) (time.Duration, error) {
+	seconds, err := strconv.ParseFloat(strings.TrimSpace(out), 64)
 	if err != nil {
-		return 0, fmt.Errorf("parse ffprobe duration %q: %w", stdout.String(), err)
+		return 0, fmt.Errorf("parse ffprobe duration %q: %w", out, err)
 	}
 	if math.IsNaN(seconds) || math.IsInf(seconds, 0) || seconds <= 0 {
-		return 0, fmt.Errorf("ffprobe reported unusable duration %q", strings.TrimSpace(stdout.String()))
+		return 0, fmt.Errorf("ffprobe reported unusable duration %q", strings.TrimSpace(out))
 	}
-	return time.Duration(seconds * float64(time.Second)), nil
+	// A value too small to be one nanosecond would become a zero progress
+	// denominator, and an absurdly large one overflows time.Duration.
+	const maxSeconds = 10 * 365 * 24 * 3600
+	d := time.Duration(seconds * float64(time.Second))
+	if seconds > maxSeconds || d <= 0 {
+		return 0, fmt.Errorf("ffprobe reported unusable duration %q", strings.TrimSpace(out))
+	}
+	return d, nil
 }
 
 // lastLines returns at most n trailing lines of s, for trimming noisy

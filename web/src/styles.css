@@ -21,6 +21,20 @@
   box-sizing: border-box;
 }
 
+/* Keyboard focus must always be visible: inputs, tabs and the role="button"
+   rows otherwise fall back to whatever the browser draws (often nothing on
+   custom-styled controls). Mouse clicks don't trigger :focus-visible. */
+:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}
+
+.entry:focus-visible,
+.job-item:focus-visible,
+.progress-tab-label:focus-visible {
+  outline-offset: -2px;
+}
+
 body {
   margin: 0;
   background: var(--bg);

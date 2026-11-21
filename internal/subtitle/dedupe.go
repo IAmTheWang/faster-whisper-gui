@@ -205,11 +205,9 @@ func collapseTextLine(line string) string {
 }
 
 type cue struct {
-	index      string
 	timing     string
 	lines      []string
 	start, end float64
-	timed      bool
 }
 
 // stripMusic removes music symbols and tidies the whitespace they leave behind.
@@ -310,13 +308,12 @@ func CleanSRT(src []byte) ([]byte, Stats, error) {
 		if len(lines) < 2 {
 			return src, stats, fmt.Errorf("subtitle: block without a timing line: %q", blk)
 		}
-		c := cue{index: lines[0], timing: lines[1], lines: lines[2:]}
-		if m := timeRE.FindStringSubmatch(lines[1]); m != nil {
-			c.start, c.end, c.timed = parseSeconds(m, 1), parseSeconds(m, 5), true
-		} else {
+		m := timeRE.FindStringSubmatch(lines[1])
+		if m == nil {
 			return src, stats, fmt.Errorf("subtitle: bad timing line %q", lines[1])
 		}
-		cues = append(cues, c)
+		// The cue's own index line is not kept: survivors are renumbered below.
+		cues = append(cues, cue{timing: lines[1], lines: lines[2:], start: parseSeconds(m, 1), end: parseSeconds(m, 5)})
 	}
 
 	emptied := make([]lineChange, len(cues)) // what emptied a cue, if anything

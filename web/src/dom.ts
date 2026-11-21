@@ -59,3 +59,57 @@ export function dirnameOf(path: string): string | null {
   const dir = path.slice(0, idx)
   return /^[a-zA-Z]:$/.test(dir) ? `${dir}\\` : dir
 }
+
+// requireEl is querySelector for elements a component's own template just
+// rendered: a miss is a bug in that template, so it throws a readable error
+// instead of leaving a `!` to crash later with "cannot read properties of null".
+export function requireEl<T extends Element>(root: ParentNode, selector: string): T {
+  const el = root.querySelector<T>(selector)
+  if (!el) throw new Error(`Missing UI element: ${selector}`)
+  return el
+}
+
+// parseBoundedInt returns undefined for blank input (caller decides the
+// default), null if invalid (not a whole number, or outside min..max), else the
+// integer.
+export function parseBoundedInt(raw: string, min: number, max: number): number | null | undefined {
+  const trimmed = raw.trim()
+  if (trimmed === '') return undefined
+  const n = Number(trimmed)
+  if (!Number.isInteger(n) || n < min || n > max) return null
+  return n
+}
+
+// delegateActivate wires ONE click and ONE Enter/Space listener on container for
+// every current and future descendant matching selector, instead of a pair of
+// listeners per row (lists are rebuilt wholesale on every refresh). Clicks whose
+// target matches ignoreSelector (e.g. a checkbox with its own handler) are
+// skipped; key presses only count when the matching element itself has focus.
+export function delegateActivate(
+  container: HTMLElement,
+  selector: string,
+  onActivate: (el: HTMLElement) => void,
+  ignoreSelector?: string,
+): void {
+  container.addEventListener('click', (e) => {
+    const target = e.target as Element | null
+    if (!target || (ignoreSelector && target.closest(ignoreSelector))) return
+    const el = target.closest<HTMLElement>(selector)
+    if (el && container.contains(el)) onActivate(el)
+  })
+  container.addEventListener('keydown', (e) => {
+    if (e.key !== 'Enter' && e.key !== ' ') return
+    const el = (e.target as Element | null)?.closest<HTMLElement>(selector)
+    if (el && e.target === el && container.contains(el)) {
+      e.preventDefault()
+      onActivate(el)
+    }
+  })
+}
+
+// markActivatable gives a non-button element button semantics for keyboard and
+// assistive tech (pair it with delegateActivate for the handlers).
+export function markActivatable(el: HTMLElement): void {
+  el.setAttribute('role', 'button')
+  el.tabIndex = 0
+}

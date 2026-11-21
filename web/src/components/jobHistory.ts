@@ -1,11 +1,22 @@
 import { api, isTerminalStatus, jobStatusLabels, type Job } from '../api'
-import { basenameOf, errMsg, escapeHtml, makeActivatable } from '../dom'
+import { basenameOf, delegateActivate, errMsg, escapeHtml, markActivatable, requireEl } from '../dom'
 import { activeTabId, openTabs } from '../state'
 
 // Minimum gap between history refreshes triggered by progress events.
 const PROGRESS_REFRESH_MS = 2000
 
+// historySignature is a cheap fingerprint of everything render() shows, so a
+// refresh that changed nothing (the common case while a job runs) can skip
+// rebuilding the list.
+export function historySignature(jobs: readonly Job[], activeId: string | null): string {
+  return `${activeId ?? ''}|${jobs
+    .map((j) => `${j.id}:${j.status}:${isTerminalStatus(j.status) ? '' : Math.round(j.percent)}:${j.request.mediaPath}`)
+    .join('|')}`
+}
+
 export interface JobHistoryHandle {
+  // Stops the pending throttled refresh and the activeTabId subscription.
+  dispose(): void
   refresh(): void
   // Like refresh, but coalesced to at most about one request per
   // PROGRESS_REFRESH_MS — for high-frequency callers (progress events).
@@ -20,10 +31,19 @@ export function mountJobHistory(root: HTMLElement): JobHistoryHandle {
       <ul class="job-list"></ul>
     </div>
   `
-  const list = root.querySelector<HTMLUListElement>('.job-list')!
-  const errorEl = root.querySelector<HTMLDivElement>('.history-error')!
+  const list = requireEl<HTMLUListElement>(root, '.job-list')
+  const errorEl = requireEl<HTMLDivElement>(root, '.history-error')
+
+  let lastSignature = ''
+  // The jobs currently shown, by id, for the delegated click handler.
+  let jobsById = new Map<string, Job>()
 
   function render(jobs: Job[]): void {
+    const signature = historySignature(jobs, activeTabId.get())
+    if (signature === lastSignature) return
+    lastSignature = signature
+    jobsById = new Map(jobs.map((j) => [j.id, j]))
+
     // The list is rebuilt wholesale; keep keyboard focus on the same row.
     const focusedId = list.contains(document.activeElement)
       ? (document.activeElement as HTMLElement).dataset.id
@@ -49,12 +69,7 @@ export function mountJobHistory(root: HTMLElement): JobHistoryHandle {
         <div class="job-name">${escapeHtml(name)}</div>
         <div class="job-status">${escapeHtml(statusText + percentSuffix)}</div>
       `
-      makeActivatable(li, () => {
-        if (!openTabs.get().some((t) => t.id === j.id)) {
-          openTabs.set([...openTabs.get(), { id: j.id, mediaName: name }])
-        }
-        activeTabId.set(j.id)
-      })
+      markActivatable(li)
       list.appendChild(li)
       if (j.id === focusedId) li.focus()
     }
@@ -95,7 +110,26 @@ export function mountJobHistory(root: HTMLElement): JobHistoryHandle {
     }
   }
 
-  activeTabId.subscribe(() => void refreshNow())
+  // Clicking a row opens (or refocuses, if already open) that job's Progress tab.
+  delegateActivate(list, '.job-item', (li) => {
+    const job = li.dataset.id ? jobsById.get(li.dataset.id) : undefined
+    if (!job) return
+    if (!openTabs.get().some((t) => t.id === job.id)) {
+      openTabs.set([...openTabs.get(), { id: job.id, mediaName: basenameOf(job.request.mediaPath) }])
+    }
+    activeTabId.set(job.id)
+  })
 
-  return { refresh: () => void refreshNow(), refreshThrottled }
+  const unsubscribeActive = activeTabId.subscribe(() => void refreshNow())
+
+  return {
+    refresh: () => void refreshNow(),
+    refreshThrottled,
+    dispose() {
+      unsubscribeActive()
+      if (throttleTimer !== null) clearTimeout(throttleTimer)
+      throttleTimer = null
+      refreshSeq++ // ignore a response still in flight
+    },
+  }
 }

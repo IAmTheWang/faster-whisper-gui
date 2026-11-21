@@ -65,7 +65,7 @@ func TestStoreCancel(t *testing.T) {
 	}
 
 	called := false
-	s.SetCancel("1", func() { called = true })
+	s.Update("1", func(j *Job) { j.cancel = func() { called = true } })
 
 	if !s.Cancel("1") {
 		t.Fatal("Cancel should return true once a cancel func is set")

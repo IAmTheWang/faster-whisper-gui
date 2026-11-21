@@ -150,16 +150,6 @@ func (s *Store) Update(id string, fn func(*Job)) bool {
 	return true
 }
 
-// SetCancel stores the cancel func the queue worker uses to interrupt this
-// job's subprocess(es) when Cancel is requested.
-func (s *Store) SetCancel(id string, cancel func()) {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	if j, ok := s.byID[id]; ok {
-		j.cancel = cancel
-	}
-}
-
 // Cancel invokes the job's cancel func, if it has one (i.e. it has started
 // running) and the job is still in a non-terminal status. Returns false if
 // the job doesn't exist, hasn't started yet, or has already finished

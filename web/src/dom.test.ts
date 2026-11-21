@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { basenameOf, dirnameOf, errMsg, escapeHtml, stripSurroundingQuotes } from './dom'
+import { basenameOf, dirnameOf, errMsg, escapeHtml, parseBoundedInt, requireEl, stripSurroundingQuotes } from './dom'
 
 describe('escapeHtml', () => {
   it('escapes markup and both quote kinds (used inside attribute values)', () => {
@@ -46,5 +46,28 @@ describe('dirnameOf', () => {
   })
   it('returns null when there is no parent', () => {
     expect(dirnameOf('a.mp4')).toBeNull()
+  })
+})
+
+describe('parseBoundedInt', () => {
+  it('returns undefined for blank input, null for invalid, else the integer', () => {
+    expect(parseBoundedInt('', 0, 10)).toBeUndefined()
+    expect(parseBoundedInt('  ', 0, 10)).toBeUndefined()
+    expect(parseBoundedInt('5', 0, 10)).toBe(5)
+    expect(parseBoundedInt(' -1 ', -1, 10)).toBe(-1)
+    expect(parseBoundedInt('11', 0, 10)).toBeNull()
+    expect(parseBoundedInt('-1', 0, 10)).toBeNull()
+    expect(parseBoundedInt('2.5', 0, 10)).toBeNull()
+    expect(parseBoundedInt('abc', 0, 10)).toBeNull()
+  })
+})
+
+describe('requireEl', () => {
+  it('returns the element, or throws a readable error when it is missing', () => {
+    const el = {}
+    expect(requireEl({ querySelector: () => el } as unknown as ParentNode, '.x')).toBe(el)
+    expect(() => requireEl({ querySelector: () => null } as unknown as ParentNode, '.missing')).toThrow(
+      'Missing UI element: .missing',
+    )
   })
 })

@@ -10,6 +10,7 @@ import (
 	"context"
 	"errors"
 	"flag"
+	"fmt"
 	"log"
 	"net"
 	"net/http"
@@ -21,10 +22,19 @@ import (
 	"faster-whisper-gui/internal/config"
 )
 
+// version is stamped at build time (scripts/build.ps1 and CI pass
+// -ldflags "-X main.version=..."); a plain `go build` reports "dev".
+var version = "dev"
+
 func main() {
 	root := flag.String("root", "", "directory containing bin/, models/, tmp/ (defaults to the executable's own directory)")
 	addr := flag.String("addr", "", "listen address override (defaults to 127.0.0.1:8080)")
+	showVersion := flag.Bool("version", false, "print the version and exit")
 	flag.Parse()
+	if *showVersion {
+		fmt.Println("faster-whisper-gui", version)
+		return
+	}
 
 	cfg, err := config.Load(*root)
 	if err != nil {
@@ -54,7 +64,7 @@ func main() {
 
 	serveErr := make(chan error, 1)
 	go func() { serveErr <- srv.Serve(ln) }()
-	log.Printf("faster-whisper-gui listening on http://%s", cfg.Addr)
+	log.Printf("faster-whisper-gui %s listening on http://%s", version, cfg.Addr)
 
 	select {
 	case err := <-serveErr:

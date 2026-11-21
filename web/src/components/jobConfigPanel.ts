@@ -1,5 +1,5 @@
 import { api, type OutputMode } from '../api'
-import { errMsg } from '../dom'
+import { errMsg, parseBoundedInt, requireEl } from '../dom'
 import { activeTabId, openTabs, selectedMedia, type TabInfo } from '../state'
 
 export interface JobConfigPanelHandle {
@@ -48,15 +48,15 @@ export function mountJobConfigPanel(root: HTMLElement, onJobCreated: () => void)
     </div>
   `
 
-  const selectedMediaEl = root.querySelector<HTMLDivElement>('.selected-media')!
-  const modelSelect = root.querySelector<HTMLSelectElement>('.model-select')!
-  const languageSelect = root.querySelector<HTMLSelectElement>('.language-select')!
+  const selectedMediaEl = requireEl<HTMLDivElement>(root, '.selected-media')
+  const modelSelect = requireEl<HTMLSelectElement>(root, '.model-select')
+  const languageSelect = requireEl<HTMLSelectElement>(root, '.language-select')
   const outputModeRadios = root.querySelectorAll<HTMLInputElement>('input[name="outputMode"]')
-  const outputDirInput = root.querySelector<HTMLInputElement>('.output-dir')!
-  const maxLenInput = root.querySelector<HTMLInputElement>('.max-len')!
-  const maxContextInput = root.querySelector<HTMLInputElement>('.max-context')!
-  const startBtn = root.querySelector<HTMLButtonElement>('.start-btn')!
-  const formError = root.querySelector<HTMLDivElement>('.form-error')!
+  const outputDirInput = requireEl<HTMLInputElement>(root, '.output-dir')
+  const maxLenInput = requireEl<HTMLInputElement>(root, '.max-len')
+  const maxContextInput = requireEl<HTMLInputElement>(root, '.max-context')
+  const startBtn = requireEl<HTMLButtonElement>(root, '.start-btn')
+  const formError = requireEl<HTMLDivElement>(root, '.form-error')
 
   function getOutputMode(): OutputMode {
     const checked = root.querySelector<HTMLInputElement>('input[name="outputMode"]:checked')
@@ -129,16 +129,6 @@ export function mountJobConfigPanel(root: HTMLElement, onJobCreated: () => void)
     }
   }
 
-  // parseBoundedInt returns undefined for blank input (caller decides the
-  // default), null if invalid, else the integer.
-  function parseBoundedInt(raw: string, min: number, max: number): number | null | undefined {
-    const trimmed = raw.trim()
-    if (trimmed === '') return undefined
-    const n = Number(trimmed)
-    if (!Number.isInteger(n) || n < min || n > max) return null
-    return n
-  }
-
   startBtn.addEventListener('click', async () => {
     formError.textContent = ''
 
@@ -193,9 +183,10 @@ export function mountJobConfigPanel(root: HTMLElement, onJobCreated: () => void)
         }
       }
 
-      if (newTabs.length > 0) {
+      const firstNewTab = newTabs[0]
+      if (firstNewTab) {
         openTabs.set([...openTabs.get(), ...newTabs])
-        activeTabId.set(newTabs[0].id)
+        activeTabId.set(firstNewTab.id)
         onJobCreated()
       }
       formError.textContent = errors.join('; ')

@@ -6,6 +6,8 @@
 
 ## 准备工作
 
+从源码构建需要 **Go 1.25+** 和 **[bun](https://bun.sh)**（前端的包管理器，不是 npm），且仅限 Windows。如果只是运行已经构建好的 `faster-whisper-gui.exe`，这两样都不需要——只要下面三项。
+
 1. **whisper.cpp（CUDA 版）**：从 [whisper.cpp releases](https://github.com/ggml-org/whisper.cpp/releases) 下载 `whisper-cublas-<cuda版本>-bin-x64.zip`（需要机器已装好匹配版本的 NVIDIA CUDA 驱动），解压后把 `whisper-cli.exe` 和相关 DLL（`ggml*.dll`、`whisper.dll`、`ggml-cuda.dll` 及 CUDA 运行时 DLL）放进 `bin/whisper/`。
 2. **ffmpeg**：下载 Windows 版 ffmpeg（含 `ffmpeg.exe` + `ffprobe.exe`），放进 `bin/ffmpeg/`。
 3. **模型文件**：下载至少一个 `ggml-*.bin` 模型（如 `ggml-small.bin`），放进 `models/`。
@@ -49,7 +51,7 @@ go build ./cmd/server
 
 ## 使用方法
 
-1. **Select Media（选择媒体文件）**——浏览到一个或多个视频/音频文件，勾选每个想转录的文件；跨文件夹导航时已勾选的项不会丢失。文件列表上方的路径框也支持直接输入或粘贴路径（比如从资源管理器"复制为路径"得到的路径）——粘贴一个文件夹会直接跳转过去，粘贴一个文件则会跳转到它所在的文件夹。
+1. **Select Media（选择媒体文件）**——浏览到一个或多个视频/音频文件，勾选每个想转录的文件；列表上方的排序按钮（名称/类型/修改时间/创建时间/大小，再点一次反向，文件夹始终排在最前）会记住你的选择，刷新页面后依然生效；跨文件夹导航时已勾选的项不会丢失。文件列表上方的路径框也支持直接输入或粘贴路径（比如从资源管理器"复制为路径"得到的路径）——粘贴一个文件夹会直接跳转过去，粘贴一个文件则会跳转到它所在的文件夹。
 2. **Transcription Settings（转录设置）**——选一次模型和语言即可，这份配置会应用到本批次所有勾选的文件（不支持逐个文件单独配置）；输出位置可选"与源文件同目录"（默认）或自定义目录。点击 **Start Transcription** 会为每个勾选的文件各建一个任务并排队。
 3. **Progress（进度）**——每个任务（不管在跑还是已完成）都有自己的一个标签页，方便同时盯着好几个文件的转录情况；底层其实仍是排队串行执行（见下方"架构简述"），切到后台的标签页也会持续实时更新，不会因为你在看别的标签就停止。任务完成后，点 **Save** 可以把这个任务的 `.srt` 另外复制一份到别的目录，或者点 **Save All Completed** 一键把本批次所有已完成任务的 `.srt` 都复制到同一个目录——这只是多存一份副本，原本保存在源文件旁边（或你指定的输出目录）的那份 `.srt`，在任务完成的那一刻就已经照常写好了，不受这个操作影响。
 4. **Job History（任务历史）**——本次运行期间跑过的所有任务，点击任意一条可以重新打开（或跳转到）对应的 Progress 标签页。
@@ -69,11 +71,21 @@ go run ./cmd/dev
 也可以还是分两个终端手动跑（`cmd/dev` 本质上就是把下面两条命令合并到一起）：
 
 ```bash
-# 终端 1
-go run ./cmd/server
+# 终端 1（在仓库根目录执行；`go run` 下必须带 -root，原因见下）
+go run ./cmd/server -root .
 # 终端 2
 cd web && bun run dev
 ```
+
+### 常见问题："Environment check failed — ffmpeg/whisper-cli: ... go-build ... cannot find the file specified"
+
+`-root` 默认是可执行文件所在目录。而 `go run` 会把程序编译到临时目录（`%LOCALAPPDATA%\go-build\...`），程序就去那里找 `bin\ffmpeg\ffmpeg.exe` 和 `bin\whisper\whisper-cli.exe`，自然找不到。解决办法任选其一：
+
+- 在仓库根目录用 `go run ./cmd/dev`（它默认把 `-root` 设为当前目录）。
+- 显式指定根目录：`go run ./cmd/server -root <仓库根目录>`。
+- 先 `go build ./cmd/server`，再在包含 `bin\` 和 `models\` 的目录下运行生成的 `.exe`。
+
+另外请确认 `bin\ffmpeg\` 和 `bin\whisper\` 里确实放了对应的可执行文件——这两个目录被 gitignore，需要手动放置（见"准备工作"）。
 
 ## 测试
 
@@ -90,11 +102,11 @@ CI（`.github/workflows/ci.yml`）在 Windows 上跑同样的步骤，并带 `go
 - **转录引擎**：whisper.cpp（子进程调用 `whisper-cli.exe`），不是 Python 版 faster-whisper——单机 Go 工具场景下不需要用户装 Python/CUDA 生态。
 - **媒体选择**：服务器端文件浏览器（`GET /api/browse`），因为浏览器原生的文件选择/拖拽拿不到本地绝对路径，而"默认保存到源文件同目录"需要这个绝对路径。
 - **批量任务，串行执行**：可以一次勾选多个视频/音频文件并共用一套模型/语言/输出配置一起启动，但它们仍会排队、一次只跑一个——单块 GPU 同时跑多个 whisper-cli 进程没有意义。Progress 面板的多标签页只是让你能并排观察多个任务的状态，并不是真的并行执行。
-- **进度上报**：SSE（`GET /api/jobs/{id}/events`），主要信号来自 whisper-cli 输出的分段时间戳，辅以其自带的百分比行。
+- **进度上报**：SSE——所有打开的任务共用一条流（`GET /api/events`，所以开很多个 Progress 标签也不会耗尽浏览器的连接数上限；`GET /api/jobs/{id}/events` 仍可单独订阅一个任务），主要信号来自 whisper-cli 输出的分段时间戳，辅以其自带的百分比行。
 - **Save 是纯新增功能**：任务一完成，`.srt` 依然会照常写到它真正的目标位置，这一点完全没变；"Save"/"Save All Completed"（`POST /api/jobs/{id}/export`）只是按需把一个已完成任务的 `.srt` 再复制一份到另一个位置。
 - **进程健壮性**：ffmpeg/whisper-cli 子进程通过 Windows Job Object 托管，取消任务（排队中或运行中）或本程序自身崩溃退出都不会留下孤儿进程。
-- **仅限本机**：服务只监听回环地址，拒绝 `Host`/`Origin` 不是回环地址的请求（防 DNS 重绑定、跨站 POST），并拒绝 UNC/设备路径——这个 API 能浏览磁盘、能指定可执行文件，绝不能让你随手打开的网页够得着。
-- 更完整的设计背景见根目录的 `CLAUDE.md`。
+- **仅限本机**：服务只监听回环地址，拒绝 `Host`/`Origin` 不是回环地址的请求（防 DNS 重绑定、跨站 POST），每个 `/api` 请求都必须带本次运行专属的密钥令牌（由服务返回的页面注入），只允许同源的 CSP，并拒绝 UNC/设备路径——这个 API 能浏览磁盘、能指定可执行文件，绝不能让你随手打开的网页够得着。
+- 更完整的设计背景见根目录的 `CLAUDE.md`；为什么选 Go + whisper.cpp 而不是 Python + faster-whisper，见 [`docs/go-vs-python-whisper.md`](docs/go-vs-python-whisper.md)。
 
 ## 已知限制
 
