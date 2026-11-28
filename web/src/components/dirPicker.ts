@@ -1,6 +1,6 @@
 import { api, type BrowseKind, type Entry } from '../api'
-import { delegateActivate, errMsg, escapeHtml, markActivatable, requireEl } from '../dom'
-import { createEntryLabel, driveFor, renderListEmpty, renderListError, Sequencer } from './listing'
+import { delegateActivate, errMsg, escapeHtml, requireEl, rowButton } from '../dom'
+import { createEntryLabel, driveFor, keepFocusInList, renderListEmpty, renderListError, Sequencer } from './listing'
 
 // Pickers only ever browse for an executable or a directory; the media picker
 // (directoryBrowser.ts) is separate.
@@ -98,7 +98,9 @@ export function mountDirPicker(mount: HTMLElement): DirPickerHandle {
       upBtn.hidden = true
       parentDir = undefined
       entriesByPath = new Map()
+      const hadFocus = entryList.contains(document.activeElement)
       renderListError(entryList, errMsg(err))
+      keepFocusInList(entryList, hadFocus)
       return 'failed'
     }
   }
@@ -111,9 +113,11 @@ export function mountDirPicker(mount: HTMLElement): DirPickerHandle {
 
   function renderEntries(entries: Entry[]): void {
     entriesByPath = new Map(entries.map((e) => [e.path, e]))
+    const hadFocus = entryList.contains(document.activeElement)
     entryList.innerHTML = ''
     if (entries.length === 0) {
       renderListEmpty(entryList)
+      keepFocusInList(entryList, hadFocus)
       return
     }
     const rows = document.createDocumentFragment()
@@ -121,11 +125,13 @@ export function mountDirPicker(mount: HTMLElement): DirPickerHandle {
       const li = document.createElement('li')
       li.className = `entry entry-${entry.type}`
       li.dataset.path = entry.path
-      markActivatable(li)
-      li.appendChild(createEntryLabel(entry))
+      const btn = rowButton()
+      btn.appendChild(createEntryLabel(entry))
+      li.appendChild(btn)
       rows.appendChild(li)
     }
     entryList.appendChild(rows)
+    keepFocusInList(entryList, hadFocus)
   }
 
   function close(): void {

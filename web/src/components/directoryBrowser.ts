@@ -3,7 +3,7 @@ import {
   delegateActivate,
   dirnameOf,
   errMsg,
-  markActivatable,
+  rowButton,
   requireEl,
   stripSurroundingQuotes,
 } from '../dom'
@@ -19,7 +19,7 @@ import {
   type SortDir,
   type SortKey,
 } from './entrySort'
-import { createEntryLabel, renderListEmpty, renderListError, Sequencer } from './listing'
+import { createEntryLabel, keepFocusInList, renderListEmpty, renderListError, Sequencer } from './listing'
 
 function toggleSelection(entry: Entry): void {
   const current = selectedMedia.get()
@@ -40,6 +40,7 @@ export function mountDirectoryBrowser(root: HTMLElement): void {
                placeholder="Drive letter or paste a full path" autocomplete="off" spellcheck="false" />
       </div>
       <div class="selection-bar">
+        <label class="select-all"><input type="checkbox" class="select-all-checkbox" disabled /> Select all in this folder</label>
         <span class="selection-count"></span>
         <button type="button" class="btn-link clear-selection" hidden>Clear</button>
       </div>
@@ -64,6 +65,7 @@ export function mountDirectoryBrowser(root: HTMLElement): void {
   const refreshBtn = requireEl<HTMLButtonElement>(root, '.refresh-btn')
   const selectionCount = requireEl<HTMLSpanElement>(root, '.selection-count')
   const clearSelectionBtn = requireEl<HTMLButtonElement>(root, '.clear-selection')
+  const selectAll = requireEl<HTMLInputElement>(root, '.select-all-checkbox')
   const breadcrumb = requireEl<HTMLDivElement>(root, '.breadcrumb')
   const entryList = requireEl<HTMLUListElement>(root, '.entry-list')
 
@@ -96,6 +98,36 @@ export function mountDirectoryBrowser(root: HTMLElement): void {
   }
 
   clearSelectionBtn.addEventListener('click', () => selectedMedia.set([]))
+
+  // Media files of the folder being shown, in the order they are displayed.
+  function visibleMedia(): Entry[] {
+    return [...currentEntries]
+      .filter((e) => e.type === 'video' || e.type === 'audio')
+      .sort(compareEntries(sortKey, sortDir))
+  }
+
+  function updateSelectAllUI(): void {
+    const media = visibleMedia()
+    const selectedPaths = new Set(selectedMedia.get().map((e) => e.path))
+    const count = media.filter((e) => selectedPaths.has(e.path)).length
+    selectAll.disabled = media.length === 0
+    selectAll.checked = media.length > 0 && count === media.length
+    selectAll.indeterminate = count > 0 && count < media.length
+  }
+
+  // Checking selects every media file here (keeping what is already checked,
+  // including files from other folders); unchecking deselects only this folder's.
+  selectAll.addEventListener('change', () => {
+    const media = visibleMedia()
+    const current = selectedMedia.get()
+    if (selectAll.checked) {
+      const have = new Set(current.map((e) => e.path))
+      selectedMedia.set([...current, ...media.filter((e) => !have.has(e.path))])
+    } else {
+      const here = new Set(media.map((e) => e.path))
+      selectedMedia.set(current.filter((e) => !here.has(e.path)))
+    }
+  })
 
   async function loadDrives(): Promise<void> {
     const drives = await api.drives()
@@ -130,7 +162,12 @@ export function mountDirectoryBrowser(root: HTMLElement): void {
     } catch (err) {
       if (!navSeq.isCurrent(ticket)) return null
       const error = err instanceof Error ? err : new Error(String(err))
+      const hadFocus = entryList.contains(document.activeElement)
       renderListError(entryList, error.message)
+      keepFocusInList(entryList, hadFocus)
+      // The rows on screen are gone, so select-all must not act on the old ones.
+      currentEntries = []
+      updateSelectAllUI()
       driveInput.value = currentPath
       return error
     }
@@ -170,9 +207,12 @@ export function mountDirectoryBrowser(root: HTMLElement): void {
   function renderSortedEntries(): void {
     const entries = [...currentEntries].sort(compareEntries(sortKey, sortDir))
     entriesByPath = new Map(entries.map((e) => [e.path, e]))
+    const hadFocus = entryList.contains(document.activeElement)
     entryList.innerHTML = ''
+    updateSelectAllUI()
     if (entries.length === 0) {
       renderListEmpty(entryList)
+      keepFocusInList(entryList, hadFocus)
       return
     }
 
@@ -192,15 +232,18 @@ export function mountDirectoryBrowser(root: HTMLElement): void {
         checkbox.checked = selectedPaths.has(entry.path)
         li.appendChild(checkbox)
         if (checkbox.checked) li.classList.add('selected')
+        // The checkbox is the focusable control on media rows (native semantics).
+        li.appendChild(createEntryLabel(entry))
       } else {
-        // The checkbox is the focusable control on media rows (native
-        // semantics); a folder row is itself the button.
-        markActivatable(li)
+        // A folder row gets a real button.
+        const btn = rowButton()
+        btn.appendChild(createEntryLabel(entry))
+        li.appendChild(btn)
       }
-      li.appendChild(createEntryLabel(entry))
       rows.appendChild(li)
     }
     entryList.appendChild(rows)
+    keepFocusInList(entryList, hadFocus)
   }
 
   // One set of listeners for the whole list, however many rows it has. A click
@@ -274,6 +317,7 @@ export function mountDirectoryBrowser(root: HTMLElement): void {
     })
     selectionCount.textContent = media.length > 0 ? `${media.length} selected` : ''
     clearSelectionBtn.hidden = media.length === 0
+    updateSelectAllUI()
   })
 
   updateSortControlsUI()

@@ -38,11 +38,16 @@ export function mountProgressPanel(
     <div class="panel">
       <h2>Progress</h2>
       <div class="progress-tabs" role="tablist" aria-label="Jobs"></div>
+      <div class="queue-controls">
+        <button type="button" class="btn-secondary queue-pause-btn">Pause All</button>
+        <span class="queue-note" aria-live="polite"></span>
+      </div>
       <div class="progress-empty">No job started yet</div>
       <div class="progress-active" role="tabpanel" hidden>
         <div class="progress-bar" role="progressbar" aria-label="Job progress" aria-valuemin="0" aria-valuemax="100" aria-valuenow="0"><div class="progress-bar-fill"></div></div>
         <div class="progress-stage" aria-live="polite"></div>
         <div class="progress-message"></div>
+        <button type="button" class="btn-secondary pause-btn" hidden>Pause</button>
         <button type="button" class="btn-secondary cancel-btn">Cancel</button>
         <div class="progress-result" aria-live="polite"></div>
         <div class="progress-save-actions">
@@ -65,6 +70,9 @@ export function mountProgressPanel(
   const stageEl = requireEl<HTMLDivElement>(root, '.progress-stage')
   const messageEl = requireEl<HTMLDivElement>(root, '.progress-message')
   const cancelBtn = requireEl<HTMLButtonElement>(root, '.cancel-btn')
+  const queuePauseBtn = requireEl<HTMLButtonElement>(root, '.queue-pause-btn')
+  const queueNote = requireEl<HTMLSpanElement>(root, '.queue-note')
+  const pauseBtn = requireEl<HTMLButtonElement>(root, '.pause-btn')
   const resultEl = requireEl<HTMLDivElement>(root, '.progress-result')
   const saveBtn = requireEl<HTMLButtonElement>(root, '.save-btn')
   const saveAllBtn = requireEl<HTMLButtonElement>(root, '.save-all-btn')
@@ -75,6 +83,46 @@ export function mountProgressPanel(
   const jobStates = new Map<string, TabState>()
   // True while an export is running, so Save buttons can't double-fire.
   let exporting = false
+
+  // ---- whole-queue pause --------------------------------------------------
+
+  let queuePaused = false
+  // The last failed Pause All/Resume All, shown until the next attempt.
+  let queueError = ''
+
+  function renderQueueControls(): void {
+    // Always shown: after a page reload there may be running jobs with no open tab.
+    queuePauseBtn.textContent = queuePaused ? 'Resume All' : 'Pause All'
+    queueNote.textContent = queueError || (queuePaused ? 'Queue paused: no new job starts until resumed.' : '')
+  }
+
+  function refreshQueueState(): void {
+    api
+      .queueState()
+      .then((s) => {
+        queuePaused = s.paused
+        renderQueueControls()
+      })
+      .catch((err) => console.warn('could not read queue state', err))
+  }
+
+  queuePauseBtn.addEventListener('click', async () => {
+    queuePauseBtn.disabled = true
+    queueError = ''
+    try {
+      const s = await (queuePaused ? api.resumeQueue() : api.pauseQueue())
+      queuePaused = s.paused
+    } catch (err) {
+      // The server may have applied the change before failing partway; re-read.
+      queueError = errMsg(err)
+      refreshQueueState()
+      renderQueueControls()
+      return
+    } finally {
+      queuePauseBtn.disabled = false
+    }
+    renderQueueControls()
+  })
 
   function updateSaveAllButton(): void {
     saveAllBtn.disabled = exporting || ![...jobStates.values()].some((s) => s.status === 'done')
@@ -215,6 +263,11 @@ export function mountProgressPanel(
     messageEl.textContent = state.message
 
     cancelBtn.hidden = isTerminalStatus(state.status)
+    // Pausing only makes sense once whisper-cli is running.
+    pauseBtn.hidden = state.status !== 'transcribing' && state.status !== 'paused'
+    pauseBtn.textContent = state.status === 'paused' ? 'Resume' : 'Pause'
+    // Per tab: a request in flight on one job must not disable another's button.
+    pauseBtn.disabled = state.pausePending === true
     saveBtn.disabled = exporting || state.status !== 'done'
     saveStatusEl.textContent = state.saveStatus?.text ?? ''
     saveStatusEl.className = state.saveStatus ? `save-status ${state.saveStatus.kind}` : 'save-status'
@@ -345,6 +398,7 @@ export function mountProgressPanel(
     })
     renderTabs()
     updateSaveAllButton()
+    renderQueueControls()
   })
 
   const unsubscribeActive = activeTabId.subscribe(() => {
@@ -365,6 +419,31 @@ export function mountProgressPanel(
       if (activeTabId.get() === id) renderActive()
     } finally {
       cancelBtn.disabled = false
+    }
+  })
+
+  // Like Cancel, no optimistic update: the "progress" event (stage paused /
+  // transcribing) the server publishes changes the displayed state.
+  pauseBtn.addEventListener('click', async () => {
+    const id = activeTabId.get()
+    if (!id) return
+    const state = jobStates.get(id)
+    if (!state) return
+    const resuming = state.status === 'paused'
+    state.cancelError = undefined
+    state.pausePending = true
+    renderActive()
+    try {
+      await (resuming ? api.resumeJob(id) : api.pauseJob(id))
+      // The server's progress event normally updates the tab; refetching covers
+      // an event that was lost or overtaken, so the button never lies.
+      void sync(id, state)
+    } catch (err) {
+      state.cancelError = errMsg(err)
+      void sync(id, state)
+    } finally {
+      state.pausePending = false
+      if (activeTabId.get() === id) renderActive()
     }
   })
 
@@ -433,6 +512,8 @@ export function mountProgressPanel(
 
   saveBtn.addEventListener('click', () => openSavePicker('single'))
   saveAllBtn.addEventListener('click', () => openSavePicker('all'))
+
+  refreshQueueState()
 
   return {
     dispose() {

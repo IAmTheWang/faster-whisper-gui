@@ -6,6 +6,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 )
@@ -191,6 +192,9 @@ func TestWhisperCppEngine_Transcribe_StderrFallbackWithoutDuration(t *testing.T)
 	if last := got[len(got)-1]; last.Percent != 50 {
 		t.Errorf("final percent = %v, want 50 from the stderr progress line", last.Percent)
 	}
+	if last := got[len(got)-1]; last.Message == "" {
+		t.Error("segment text was dropped; it should still be shown without a probed duration")
+	}
 }
 
 func TestWhisperCppEngine_Transcribe_NilCallbackIsFine(t *testing.T) {
@@ -347,5 +351,60 @@ func TestCheckWhisperCliAndFfmpeg_NonZeroExitSurfacesOutput(t *testing.T) {
 				t.Errorf("Detail = %q, want the binary's own output", h.Detail)
 			}
 		})
+	}
+}
+
+// The controller handed out through OnStart really freezes the subprocess; a
+// frozen one is still canceled promptly, and the handle is withdrawn (nil) when
+// Transcribe returns.
+func TestWhisperCppEngine_Transcribe_ControllerSuspendResumeThenCancel(t *testing.T) {
+	eng := fakeEngine(t, "hang")
+	opts := fakeOptions(t, 10*time.Second)
+
+	var (
+		mu        sync.Mutex
+		ctl       Controller
+		withdrawn bool
+	)
+	opts.OnStart = func(c Controller) {
+		mu.Lock()
+		defer mu.Unlock()
+		if c == nil {
+			withdrawn = true
+			return
+		}
+		ctl = c
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	go func() {
+		deadline := time.Now().Add(5 * time.Second)
+		for time.Now().Before(deadline) {
+			mu.Lock()
+			c := ctl
+			mu.Unlock()
+			if c != nil {
+				if err := c.Suspend(); err != nil {
+					t.Errorf("Suspend: %v", err)
+				} else if err := c.Resume(); err != nil {
+					t.Errorf("Resume: %v", err)
+				} else if err := c.Suspend(); err != nil {
+					t.Errorf("Suspend again: %v", err)
+				}
+				cancel() // canceled while frozen
+				return
+			}
+			time.Sleep(10 * time.Millisecond)
+		}
+		cancel()
+	}()
+
+	if _, err := runTranscribe(t, ctx, eng, opts, nil, 10*time.Second); err == nil {
+		t.Fatal("want an error after cancel")
+	}
+	mu.Lock()
+	defer mu.Unlock()
+	if ctl == nil || !withdrawn {
+		t.Fatalf("controller handed out=%v, withdrawn=%v; want both true", ctl != nil, withdrawn)
 	}
 }

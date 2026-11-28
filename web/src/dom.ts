@@ -19,22 +19,6 @@ export function errMsg(err: unknown): string {
   return err instanceof Error ? err.message : String(err)
 }
 
-// makeActivatable makes a non-button element (a clickable <li> row) behave
-// like a button for keyboard and assistive-tech users: focusable, announced
-// as a button, and triggered by Enter/Space as well as click.
-export function makeActivatable(el: HTMLElement, onActivate: () => void): void {
-  el.setAttribute('role', 'button')
-  el.tabIndex = 0
-  el.addEventListener('click', onActivate)
-  el.addEventListener('keydown', (e) => {
-    if (e.target !== el) return
-    if (e.key === 'Enter' || e.key === ' ') {
-      e.preventDefault()
-      onActivate()
-    }
-  })
-}
-
 // basenameOf extracts the filename from a Windows or forward-slash path, for
 // labeling a Progress tab reopened from Job History (a fresh job already has
 // its Entry.name in hand and doesn't need this).
@@ -80,11 +64,21 @@ export function parseBoundedInt(raw: string, min: number, max: number): number |
   return n
 }
 
-// delegateActivate wires ONE click and ONE Enter/Space listener on container for
-// every current and future descendant matching selector, instead of a pair of
-// listeners per row (lists are rebuilt wholesale on every refresh). Clicks whose
-// target matches ignoreSelector (e.g. a checkbox with its own handler) are
-// skipped; key presses only count when the matching element itself has focus.
+// rowButton is the focusable control of a clickable list row: a real <button>
+// inside the <li>, so the row keeps its list semantics while keyboard and
+// assistive-tech users get native button behaviour (Enter/Space fire a click).
+export function rowButton(): HTMLButtonElement {
+  const btn = document.createElement('button')
+  btn.type = 'button'
+  btn.className = 'row-btn'
+  return btn
+}
+
+// delegateActivate wires ONE click listener on container for every current and
+// future descendant matching selector, instead of one per row (lists are
+// rebuilt wholesale on every refresh). A row's button turns Enter/Space into a
+// click, so keys need no handling of their own. Clicks whose target matches
+// ignoreSelector (e.g. a checkbox with its own handler) are skipped.
 export function delegateActivate(
   container: HTMLElement,
   selector: string,
@@ -97,19 +91,4 @@ export function delegateActivate(
     const el = target.closest<HTMLElement>(selector)
     if (el && container.contains(el)) onActivate(el)
   })
-  container.addEventListener('keydown', (e) => {
-    if (e.key !== 'Enter' && e.key !== ' ') return
-    const el = (e.target as Element | null)?.closest<HTMLElement>(selector)
-    if (el && e.target === el && container.contains(el)) {
-      e.preventDefault()
-      onActivate(el)
-    }
-  })
-}
-
-// markActivatable gives a non-button element button semantics for keyboard and
-// assistive tech (pair it with delegateActivate for the handlers).
-export function markActivatable(el: HTMLElement): void {
-  el.setAttribute('role', 'button')
-  el.tabIndex = 0
 }

@@ -2,6 +2,7 @@ package transcribe
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"io"
 	"os/exec"
@@ -100,6 +101,20 @@ func parseStderrPercent(line string) (float64, bool) {
 	return v, true
 }
 
+// processController adapts a ManagedProcess to Controller, reporting a process
+// that is already gone as ErrProcessGone.
+type processController struct{ mp *procutil.ManagedProcess }
+
+func (c processController) Suspend() error { return gone(c.mp.Suspend()) }
+func (c processController) Resume() error  { return gone(c.mp.Resume()) }
+
+func gone(err error) error {
+	if errors.Is(err, procutil.ErrProcessClosed) {
+		return ErrProcessGone
+	}
+	return err
+}
+
 type progressUpdate struct {
 	percent float64
 	message string
@@ -127,6 +142,12 @@ func (e *WhisperCppEngine) Transcribe(ctx context.Context, opts Options, onProgr
 		return fmt.Errorf("start whisper-cli: %w", err)
 	}
 	defer mp.Close()
+	if opts.OnStart != nil {
+		opts.OnStart(processController{mp})
+		// Withdrawn as soon as this function returns, so a late Pause gets a
+		// clean "not running" instead of poking an exited process.
+		defer opts.OnStart(nil)
+	}
 
 	const maxTailLines = 20
 	var stderrTail []string
@@ -140,13 +161,13 @@ func (e *WhisperCppEngine) Transcribe(ctx context.Context, opts Options, onProgr
 		scanner := procutil.NewCRLineScanner(stdoutPipe)
 		for scanner.Scan() {
 			line := scanner.Text()
-			if opts.TotalDuration <= 0 {
-				continue
-			}
 			if end, text, ok := parseSegmentEnd(line); ok {
-				pct := float64(end) / float64(opts.TotalDuration) * 100
-				if pct > 100 {
-					pct = 100
+				// Without a probed duration there is no percentage to derive from
+				// the timestamps (stderr's own line is the fallback), but the
+				// segment text is still worth showing.
+				var pct float64
+				if opts.TotalDuration > 0 {
+					pct = min(100, float64(end)/float64(opts.TotalDuration)*100)
 				}
 				updates <- progressUpdate{percent: pct, message: text}
 			}

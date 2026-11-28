@@ -1,6 +1,7 @@
 import { api, type OutputMode } from '../api'
 import { errMsg, parseBoundedInt, requireEl } from '../dom'
 import { activeTabId, openTabs, selectedMedia, type TabInfo } from '../state'
+import { summarizeFailures } from './jobFailures'
 
 export interface JobConfigPanelHandle {
   refreshModels: () => Promise<void>
@@ -164,7 +165,7 @@ export function mountJobConfigPanel(root: HTMLElement, onJobCreated: () => void)
       // the user picked them.
       const newTabs: TabInfo[] = []
       const createdPaths = new Set<string>()
-      const errors: string[] = []
+      const failures: { name: string; message: string }[] = []
       for (const file of files) {
         try {
           const res = await api.createJob({
@@ -179,7 +180,7 @@ export function mountJobConfigPanel(root: HTMLElement, onJobCreated: () => void)
           newTabs.push({ id: res.jobId, mediaName: file.name })
           createdPaths.add(file.path)
         } catch (err) {
-          errors.push(`${file.name}: ${errMsg(err)}`)
+          failures.push({ name: file.name, message: errMsg(err) })
         }
       }
 
@@ -189,7 +190,7 @@ export function mountJobConfigPanel(root: HTMLElement, onJobCreated: () => void)
         activeTabId.set(firstNewTab.id)
         onJobCreated()
       }
-      formError.textContent = errors.join('; ')
+      formError.textContent = summarizeFailures(failures)
       // Only drop files that actually became jobs; failures stay checked so
       // the user can fix the problem and retry. (Re-read the store: the user
       // may have changed the selection while requests were in flight.)

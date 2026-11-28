@@ -46,6 +46,15 @@ export function createEntryLabel(entry: Entry): HTMLSpanElement {
   return label
 }
 
+// keepFocusInList puts keyboard focus back into a list that was just rebuilt
+// (rebuilding drops the focused row to <body>, which for a dialog also loses
+// Escape handling): the first row's control, or the list itself when empty.
+export function keepFocusInList(list: HTMLElement, hadFocus: boolean): void {
+  if (!hadFocus) return
+  list.tabIndex = -1
+  ;(list.querySelector<HTMLElement>('.row-btn, .media-checkbox') ?? list).focus()
+}
+
 export function renderListError(list: HTMLElement, message: string): void {
   list.innerHTML = `<li class="entry-error" role="alert">${escapeHtml(message)}</li>`
 }

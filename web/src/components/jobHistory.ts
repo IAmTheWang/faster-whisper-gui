@@ -1,5 +1,5 @@
 import { api, isTerminalStatus, jobStatusLabels, type Job } from '../api'
-import { basenameOf, delegateActivate, errMsg, escapeHtml, markActivatable, requireEl } from '../dom'
+import { basenameOf, delegateActivate, errMsg, escapeHtml, requireEl, rowButton } from '../dom'
 import { activeTabId, openTabs } from '../state'
 
 // Minimum gap between history refreshes triggered by progress events.
@@ -46,7 +46,7 @@ export function mountJobHistory(root: HTMLElement): JobHistoryHandle {
 
     // The list is rebuilt wholesale; keep keyboard focus on the same row.
     const focusedId = list.contains(document.activeElement)
-      ? (document.activeElement as HTMLElement).dataset.id
+      ? (document.activeElement as HTMLElement).closest<HTMLElement>('.job-item')?.dataset.id
       : undefined
 
     list.innerHTML = ''
@@ -65,13 +65,14 @@ export function mountJobHistory(root: HTMLElement): JobHistoryHandle {
       li.className = `job-item job-${j.status}`
       li.dataset.id = j.id
       if (j.id === activeId) li.classList.add('active')
-      li.innerHTML = `
-        <div class="job-name">${escapeHtml(name)}</div>
-        <div class="job-status">${escapeHtml(statusText + percentSuffix)}</div>
+      const btn = rowButton()
+      btn.innerHTML = `
+        <span class="job-name">${escapeHtml(name)}</span>
+        <span class="job-status">${escapeHtml(statusText + percentSuffix)}</span>
       `
-      markActivatable(li)
+      li.appendChild(btn)
       list.appendChild(li)
-      if (j.id === focusedId) li.focus()
+      if (j.id === focusedId) btn.focus()
     }
   }
 

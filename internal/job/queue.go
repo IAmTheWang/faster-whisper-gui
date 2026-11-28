@@ -55,6 +55,16 @@ type Queue struct {
 	closed   bool // set by Shutdown (under submitMu); Submit then refuses new jobs
 
 	workerDone chan struct{} // closed when the worker goroutine has exited
+
+	// controllers holds the pause/resume handle of each job whose engine
+	// process is running; pauseMu also serializes Pause/Resume so the status
+	// flip and the process freeze/thaw can't interleave.
+	pauseMu     sync.Mutex
+	controllers map[string]transcribe.Controller
+	held        bool          // queue-wide pause: no job starts, a running one is frozen
+	resumeCh    chan struct{} // closed (and replaced) when the hold is lifted
+
+	stopCh chan struct{} // closed by Shutdown, releases a worker waiting on the hold
 }
 
 func NewQueue(store *Store, pipeline Pipeline, events EventPublisher) *Queue {
@@ -64,7 +74,10 @@ func NewQueue(store *Store, pipeline Pipeline, events EventPublisher) *Queue {
 		events:   events,
 		submit:   make(chan *Job, 64),
 
-		workerDone: make(chan struct{}),
+		workerDone:  make(chan struct{}),
+		controllers: make(map[string]transcribe.Controller),
+		resumeCh:    make(chan struct{}),
+		stopCh:      make(chan struct{}),
 	}
 	go q.run()
 	return q
@@ -151,6 +164,180 @@ func (q *Queue) Cancel(id string) bool {
 	return true
 }
 
+// ErrNotRunning is returned by Pause when the job has no running transcription
+// to freeze (not found, still queued or extracting audio, or finished).
+var ErrNotRunning = errors.New("job is not transcribing")
+
+// ErrNotPaused is returned by Resume for a job that is not paused.
+var ErrNotPaused = errors.New("job is not paused")
+
+// Pause freezes a transcribing job's whisper-cli process: no CPU/GPU work is
+// done until Resume, and progress picks up exactly where it stopped. The job
+// keeps occupying the single worker, so queued jobs wait behind it. Cancel
+// still works on a paused job.
+func (q *Queue) Pause(id string) error {
+	q.pauseMu.Lock()
+	defer q.pauseMu.Unlock()
+	ctl := q.controllers[id]
+	cur, ok := q.store.Get(id)
+	if ctl == nil || !ok || cur.Status != StatusTranscribing {
+		return ErrNotRunning
+	}
+	if err := ctl.Suspend(); err != nil {
+		if errors.Is(err, transcribe.ErrProcessGone) {
+			return ErrNotRunning // it finished while we were looking
+		}
+		return fmt.Errorf("pause: %w", err)
+	}
+	q.setPaused(id, true)
+	return nil
+}
+
+// Resume thaws a job frozen by Pause.
+func (q *Queue) Resume(id string) error {
+	q.pauseMu.Lock()
+	defer q.pauseMu.Unlock()
+	ctl := q.controllers[id]
+	cur, ok := q.store.Get(id)
+	if !ok || cur.Status != StatusPaused {
+		return ErrNotPaused
+	}
+	if ctl == nil {
+		return ErrNotPaused
+	}
+	if err := ctl.Resume(); err != nil {
+		if errors.Is(err, transcribe.ErrProcessGone) {
+			return ErrNotPaused
+		}
+		return fmt.Errorf("resume: %w", err)
+	}
+	q.setPaused(id, false)
+	return nil
+}
+
+// setPaused flips a job between transcribing and paused (never touching a job
+// that reached a terminal state meanwhile) and publishes the change.
+func (q *Queue) setPaused(id string, paused bool) {
+	to, from := StatusTranscribing, StatusPaused
+	message := "Transcribing"
+	if paused {
+		to, from = StatusPaused, StatusTranscribing
+		message = "Paused"
+	}
+	var percent float64
+	changed := false
+	q.store.Update(id, func(j *Job) {
+		if j.Status != from {
+			return
+		}
+		changed = true
+		j.Status = to
+		j.Message = message
+		percent = j.Percent
+	})
+	if changed {
+		q.events.Publish(id, "progress", map[string]any{
+			"stage": string(to), "percent": percent, "message": message,
+		})
+	}
+}
+
+func (q *Queue) setController(id string, ctl transcribe.Controller) {
+	q.pauseMu.Lock()
+	if ctl == nil {
+		delete(q.controllers, id)
+		q.pauseMu.Unlock()
+		return
+	}
+	q.controllers[id] = ctl
+	// The queue was paused while this job was still extracting audio: freeze it
+	// the moment whisper-cli exists.
+	// The status flip happens before the lock is released, so no Pause/Resume/
+	// ResumeAll can observe the frozen process with a "transcribing" status.
+	if q.held {
+		if err := ctl.Suspend(); err != nil {
+			if !errors.Is(err, transcribe.ErrProcessGone) {
+				slog.Warn("could not freeze job on a paused queue", "job", id, "error", err)
+				cur, _ := q.store.Get(id)
+				q.setStatus(id, StatusTranscribing, cur.Percent, "Queue is paused, but this job could not be frozen and keeps running")
+			}
+		} else {
+			q.setPaused(id, true)
+		}
+	}
+	q.pauseMu.Unlock()
+}
+
+// Held reports whether the whole queue is paused.
+func (q *Queue) Held() bool {
+	q.pauseMu.Lock()
+	defer q.pauseMu.Unlock()
+	return q.held
+}
+
+// PauseAll holds the queue: no further job starts, and the running one (if it
+// is transcribing) is frozen. A job still extracting audio freezes as soon as
+// transcription begins. Idempotent.
+func (q *Queue) PauseAll() error {
+	q.pauseMu.Lock()
+	defer q.pauseMu.Unlock()
+	q.held = true
+	var errs []error
+	for id, ctl := range q.controllers {
+		if cur, ok := q.store.Get(id); ok && cur.Status == StatusTranscribing {
+			if err := ctl.Suspend(); err != nil {
+				if !errors.Is(err, transcribe.ErrProcessGone) { // already finishing: nothing to freeze
+					errs = append(errs, err)
+				}
+				continue
+			}
+			q.setPaused(id, true)
+		}
+	}
+	return errors.Join(errs...)
+}
+
+// ResumeAll lifts the hold and thaws every paused job. Idempotent.
+func (q *Queue) ResumeAll() error {
+	q.pauseMu.Lock()
+	defer q.pauseMu.Unlock()
+	if q.held {
+		q.held = false
+		close(q.resumeCh)
+		q.resumeCh = make(chan struct{})
+	}
+	var errs []error
+	for id, ctl := range q.controllers {
+		if cur, ok := q.store.Get(id); ok && cur.Status == StatusPaused {
+			if err := ctl.Resume(); err != nil {
+				if !errors.Is(err, transcribe.ErrProcessGone) {
+					errs = append(errs, err)
+				}
+				continue
+			}
+			q.setPaused(id, false)
+		}
+	}
+	return errors.Join(errs...)
+}
+
+// waitWhileHeld blocks the worker between jobs while the queue is paused.
+func (q *Queue) waitWhileHeld() {
+	for {
+		q.pauseMu.Lock()
+		held, ch := q.held, q.resumeCh
+		q.pauseMu.Unlock()
+		if !held {
+			return
+		}
+		select {
+		case <-ch:
+		case <-q.stopCh:
+			return
+		}
+	}
+}
+
 // Shutdown stops accepting jobs, cancels every unfinished one (a job still
 // waiting is marked canceled at once; a running one unwinds through its
 // context, which also kills its subprocess tree and removes its temp WAV) and
@@ -161,6 +348,7 @@ func (q *Queue) Shutdown(ctx context.Context) error {
 	q.submitMu.Lock()
 	if !q.closed {
 		q.closed = true
+		close(q.stopCh)
 		close(q.submit) // Submit sends under submitMu and checks closed first
 	}
 	q.submitMu.Unlock()
@@ -182,6 +370,7 @@ func (q *Queue) Shutdown(ctx context.Context) error {
 func (q *Queue) run() {
 	defer close(q.workerDone)
 	for j := range q.submit {
+		q.waitWhileHeld()
 		q.safeProcess(j)
 	}
 }
@@ -256,7 +445,9 @@ func (q *Queue) process(j *Job) {
 		MaxLen:        j.Request.MaxLen,
 		MaxContext:    j.Request.MaxContext,
 		TotalDuration: duration,
+		OnStart:       func(c transcribe.Controller) { q.setController(j.ID, c) },
 	}
+	defer q.setController(j.ID, nil)
 	// whisper-cli prints a line per segment, which can be many per second;
 	// forward at most one update per progressInterval (the final 100% comes
 	// from the Done transition below).
@@ -323,6 +514,12 @@ func (q *Queue) setStatus(id string, status Status, percent float64, message str
 			return
 		}
 		ok = true
+		// Output buffered in the pipe before the process was frozen can still
+		// arrive; it must not flip a paused job back to transcribing.
+		if j.Status == StatusPaused && status == StatusTranscribing {
+			status = StatusPaused
+			message = j.Message
+		}
 		j.Status = status
 		j.Percent = percent
 		j.Message = message

@@ -28,6 +28,9 @@ var censoredRE = regexp.MustCompile(`[A-Za-z]+(?:\*+[A-Za-z]+)+`)
 // so an ambiguous mask is left as it was. The original capitalisation style
 // (lower, Capitalised, UPPER) is kept.
 func Uncensor(line string) string {
+	if strings.IndexByte(line, '*') < 0 {
+		return line // every mask contains a '*'
+	}
 	return censoredRE.ReplaceAllStringFunc(line, func(masked string) string {
 		lower := strings.ToLower(masked)
 		match := ""

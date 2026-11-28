@@ -29,10 +29,39 @@
   outline-offset: 2px;
 }
 
-.entry:focus-visible,
-.job-item:focus-visible,
+.row-btn:focus-visible,
 .progress-tab-label:focus-visible {
   outline-offset: -2px;
+}
+
+/* The focusable control of a list row: a real button that fills the row, so
+   the focus ring and the click target are the whole row. */
+.row-btn {
+  display: block;
+  width: 100%;
+  margin: 0;
+  padding: 6px 10px;
+  border: 0;
+  border-radius: inherit;
+  background: none;
+  color: inherit;
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+
+.entry:has(> .row-btn),
+.job-item:has(> .row-btn) {
+  padding: 0;
+}
+
+.job-item > .row-btn {
+  padding: 8px 10px;
+}
+
+.job-name,
+.job-status {
+  display: block;
 }
 
 body {
@@ -419,6 +448,13 @@ body {
 
 /* directory browser selection bar */
 
+.select-all {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  cursor: pointer;
+}
+
 .selection-bar {
   display: flex;
   align-items: center;
@@ -604,4 +640,13 @@ body {
   .app-layout {
     grid-template-columns: 1fr;
   }
+}
+
+.queue-controls {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin: 8px 0;
+  font-size: 12px;
+  color: var(--text-dim);
 }

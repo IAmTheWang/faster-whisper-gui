@@ -19,6 +19,11 @@ func (s *Server) RegisterRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("GET /api/jobs/{id}/events", s.handleJobEvents)
 	mux.HandleFunc("GET /api/events", s.handleAllEvents)
 	mux.HandleFunc("POST /api/jobs/{id}/cancel", s.handleCancelJob)
+	mux.HandleFunc("GET /api/queue", s.handleQueueState)
+	mux.HandleFunc("POST /api/queue/pause", s.handlePauseQueue)
+	mux.HandleFunc("POST /api/queue/resume", s.handleResumeQueue)
+	mux.HandleFunc("POST /api/jobs/{id}/pause", s.handlePauseJob)
+	mux.HandleFunc("POST /api/jobs/{id}/resume", s.handleResumeJob)
 	mux.HandleFunc("POST /api/jobs/{id}/export", s.handleExportJob)
 	// Anything else under /api/ is a JSON 404 rather than falling through to
 	// the SPA's index.html.

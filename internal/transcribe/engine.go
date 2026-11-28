@@ -6,6 +6,7 @@ package transcribe
 
 import (
 	"context"
+	"errors"
 	"time"
 )
 
@@ -20,6 +21,21 @@ type Options struct {
 	MaxLen        int           // max characters per subtitle cue; 0 = engine default
 	MaxContext    int           // -mc passed to whisper-cli; 0 disables context carryover between segments (default, avoids hallucination propagating through the rest of a file); whisper-cli's own native default is -1 (unlimited)
 	TotalDuration time.Duration // source audio duration, for progress percentage
+	// OnStart, if set, is called once the engine's subprocess is running, with a
+	// handle to freeze and thaw it, and once more with nil when Transcribe is about
+	// to return, after which the handle must not be used.
+	OnStart func(Controller)
+}
+
+// ErrProcessGone is what a Controller returns once the transcription process
+// has already exited: there is nothing left to freeze or thaw.
+var ErrProcessGone = errors.New("the transcription process has already exited")
+
+// Controller pauses and resumes a running transcription without losing its
+// progress: the underlying process is frozen, not restarted.
+type Controller interface {
+	Suspend() error
+	Resume() error
 }
 
 // Progress is reported as transcription advances through the audio.

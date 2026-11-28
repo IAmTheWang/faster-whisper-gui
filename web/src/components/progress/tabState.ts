@@ -21,6 +21,8 @@ export interface TabState {
   // event or tab switch without losing them.
   saveStatus?: SaveStatus
   cancelError?: string
+  // A pause/resume request is in flight for this job (disables its button only).
+  pausePending?: boolean
   // True once a snapshot from the server or a live event has been applied; a
   // failed first load (never synced) is shown as an error on the tab.
   synced: boolean

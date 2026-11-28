@@ -16,6 +16,7 @@ const (
 	StatusQueued          Status = "queued"
 	StatusExtractingAudio Status = "extracting_audio"
 	StatusTranscribing    Status = "transcribing"
+	StatusPaused          Status = "paused" // a transcribing job whose process is frozen; resumes where it left off
 	StatusDone            Status = "done"
 	StatusFailed          Status = "failed"
 	StatusCanceled        Status = "canceled"

@@ -25,6 +25,7 @@ type ManagedProcess struct {
 	mu     sync.Mutex
 	job    *JobObject // nil in degraded mode (job object unavailable) or once closed
 	closed bool
+	exited bool          // Wait returned: the PID may be reused from now on
 	done   chan struct{} // closed by Close; stops the StartContext watcher
 }
 
@@ -97,6 +98,46 @@ func resumeProcess(pid int) error {
 	return nil
 }
 
+var procNtSuspendProcess = windows.NewLazySystemDLL("ntdll.dll").NewProc("NtSuspendProcess")
+
+// setSuspended freezes (or thaws) every thread of the process. The process
+// keeps its memory (including any GPU memory it holds) while suspended.
+func setSuspended(pid int, suspend bool) error {
+	h, err := windows.OpenProcess(windows.PROCESS_SUSPEND_RESUME, false, uint32(pid))
+	if err != nil {
+		return fmt.Errorf("open process: %w", err)
+	}
+	defer windows.CloseHandle(h)
+	proc, name := procNtResumeProcess, "NtResumeProcess"
+	if suspend {
+		proc, name = procNtSuspendProcess, "NtSuspendProcess"
+	}
+	if status, _, _ := proc.Call(uintptr(h)); status != 0 {
+		return fmt.Errorf("%s: NTSTATUS %#x", name, status)
+	}
+	return nil
+}
+
+// ErrProcessClosed is returned by Suspend/Resume once Close has been called:
+// the process may be gone and its PID reused.
+var ErrProcessClosed = fmt.Errorf("process is already closed")
+
+// Suspend freezes the process until Resume. Not reference counted at this
+// level: callers must not call it twice without a Resume in between.
+func (mp *ManagedProcess) Suspend() error { return mp.suspend(true) }
+
+// Resume thaws a process frozen by Suspend.
+func (mp *ManagedProcess) Resume() error { return mp.suspend(false) }
+
+func (mp *ManagedProcess) suspend(suspend bool) error {
+	mp.mu.Lock()
+	defer mp.mu.Unlock()
+	if mp.closed || mp.exited || mp.cmd.Process == nil {
+		return ErrProcessClosed
+	}
+	return setSuspended(mp.cmd.Process.Pid, suspend)
+}
+
 // StartContext is Start plus context cancellation: when ctx is done the whole
 // job object tree is terminated, not just the direct child. Plain
 // exec.CommandContext only kills the direct child, so a grandchild still
@@ -123,7 +164,11 @@ func StartContext(ctx context.Context, cmd *exec.Cmd) (*ManagedProcess, error) {
 
 // Wait blocks until the process exits.
 func (mp *ManagedProcess) Wait() error {
-	return mp.cmd.Wait()
+	err := mp.cmd.Wait()
+	mp.mu.Lock()
+	mp.exited = true
+	mp.mu.Unlock()
+	return err
 }
 
 // Stop forcibly terminates the process and, when job-object tracking is

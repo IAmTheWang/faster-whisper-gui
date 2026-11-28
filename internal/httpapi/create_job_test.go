@@ -7,6 +7,7 @@ import (
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -38,6 +39,12 @@ func newCreateJobServer(t *testing.T) (*Server, string) {
 	}
 	if err := os.WriteFile(filepath.Join(cfg.ModelsDir, "ggml-tiny.bin"), []byte("m"), 0o644); err != nil {
 		t.Fatal(err)
+	}
+	// handleCreateJob refuses to queue work when the binaries are missing.
+	for _, bin := range []string{cfg.WhisperCliPath, cfg.FfmpegPath} {
+		if err := os.WriteFile(bin, []byte("x"), 0o644); err != nil {
+			t.Fatal(err)
+		}
 	}
 	media := filepath.Join(root, "clip.wav")
 	if err := os.WriteFile(media, []byte("w"), 0o644); err != nil {
@@ -150,5 +157,44 @@ func TestHandleCancelJobFinishedIsConflict(t *testing.T) {
 	s.handleCancelJob(rr, req)
 	if rr.Code != http.StatusConflict {
 		t.Fatalf("got %d, want 409", rr.Code)
+	}
+}
+
+func TestPauseResumeEndpointsStatusCodes(t *testing.T) {
+	s, _ := newCreateJobServer(t)
+	s.Store.Add(&job.Job{ID: "done1", Status: job.StatusDone})
+	call := func(h http.HandlerFunc, id string) int {
+		req := httptest.NewRequest(http.MethodPost, "/api/jobs/"+id+"/x", nil)
+		req.SetPathValue("id", id)
+		rr := httptest.NewRecorder()
+		h(rr, req)
+		return rr.Code
+	}
+	if got := call(s.handlePauseJob, "missing"); got != http.StatusNotFound {
+		t.Errorf("pause unknown job = %d, want 404", got)
+	}
+	if got := call(s.handlePauseJob, "done1"); got != http.StatusConflict {
+		t.Errorf("pause finished job = %d, want 409", got)
+	}
+	if got := call(s.handleResumeJob, "done1"); got != http.StatusConflict {
+		t.Errorf("resume a job that is not paused = %d, want 409", got)
+	}
+}
+
+func TestCreateJobFailsFastWhenBinaryMissing(t *testing.T) {
+	s, media := newCreateJobServer(t)
+	if err := os.Remove(s.Config.WhisperCliPath); err != nil {
+		t.Fatal(err)
+	}
+	body := `{"mediaPath":` + strconv.Quote(media) + `,"modelId":"tiny","language":"auto"}`
+	req := httptest.NewRequest(http.MethodPost, "/api/jobs", strings.NewReader(body))
+	req.Header.Set("Content-Type", "application/json")
+	rr := httptest.NewRecorder()
+	s.handleCreateJob(rr, req)
+	if rr.Code != http.StatusBadRequest || !strings.Contains(rr.Body.String(), "whisper-cli.exe was not found") {
+		t.Fatalf("got %d %s, want 400 naming whisper-cli.exe", rr.Code, rr.Body)
+	}
+	if len(s.Store.List()) != 0 {
+		t.Fatal("a job was queued despite the missing binary")
 	}
 }

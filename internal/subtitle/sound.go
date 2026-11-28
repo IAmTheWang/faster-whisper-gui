@@ -21,7 +21,7 @@ var soundTagRE = regexp.MustCompile(`(^|[^\p{L}\p{N}*])(?:` +
 // they leave behind: "*Sings* Yes, baby." -> "Yes, baby.". A line that was
 // only an annotation ("*Mumbling*") ends up empty, which drops its cue.
 func stripSoundTags(line string) string {
-	if !soundTagRE.MatchString(line) {
+	if !strings.ContainsAny(line, "*[(（【") || !soundTagRE.MatchString(line) {
 		return line
 	}
 	out := soundTagRE.ReplaceAllString(line, "$1")

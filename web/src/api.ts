@@ -176,6 +176,18 @@ function jsonRequest(method: string, body: unknown): RequestInit {
   return { method, headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) }
 }
 
+export interface QueueState {
+  paused: boolean
+}
+
+// postAction sends a bodiless job command (cancel, pause, resume).
+async function postAction(id: string, action: 'cancel' | 'pause' | 'resume'): Promise<void> {
+  const res = await apiFetch(`/api/jobs/${encodeURIComponent(id)}/${action}`, { method: 'POST' })
+  if (!res.ok) {
+    throw new Error(await errorMessageFrom(res))
+  }
+}
+
 export const api = {
   health: () => request<HealthResponse>('/api/health'),
   drives: () => request<Drive[] | null>('/api/drives').then((d) => d ?? []),
@@ -195,12 +207,12 @@ export const api = {
     return request<CreateJobResponse>('/api/jobs', jsonRequest('POST', body))
   },
 
-  async cancelJob(id: string): Promise<void> {
-    const res = await apiFetch(`/api/jobs/${encodeURIComponent(id)}/cancel`, { method: 'POST' })
-    if (!res.ok) {
-      throw new Error(await errorMessageFrom(res))
-    }
-  },
+  cancelJob: (id: string) => postAction(id, 'cancel'),
+  queueState: () => request<QueueState>('/api/queue'),
+  pauseQueue: () => request<QueueState>('/api/queue/pause', { method: 'POST' }),
+  resumeQueue: () => request<QueueState>('/api/queue/resume', { method: 'POST' }),
+  pauseJob: (id: string) => postAction(id, 'pause'),
+  resumeJob: (id: string) => postAction(id, 'resume'),
 
   exportJob(id: string, destDir: string): Promise<ExportJobResponse> {
     return request<ExportJobResponse>(`/api/jobs/${encodeURIComponent(id)}/export`, jsonRequest('POST', { destDir }))

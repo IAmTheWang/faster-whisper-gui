@@ -5,6 +5,7 @@ export type JobStatus =
   | 'queued'
   | 'extracting_audio'
   | 'transcribing'
+  | 'paused'
   | 'done'
   | 'failed'
   | 'canceled'
@@ -13,6 +14,7 @@ export const jobStatusLabels: Record<JobStatus, string> = {
   queued: 'Queued',
   extracting_audio: 'Extracting audio',
   transcribing: 'Transcribing',
+  paused: 'Paused',
   done: 'Done',
   failed: 'Failed',
   canceled: 'Canceled',

@@ -131,6 +131,9 @@ func normWord(word string) string {
 // alike; the punctuation that ended the run (e.g. the final "." or "。") is
 // kept on the last surviving repeat.
 func CollapseRepeats(line string) string {
+	if tooFewTokens(line) {
+		return line
+	}
 	locs := tokenRE.FindAllStringSubmatchIndex(line, -1)
 	if len(locs) == 0 {
 		return line
@@ -181,6 +184,21 @@ func CollapseRepeats(line string) string {
 	return b.String()
 }
 
+// tooFewTokens is a cheap pre-check: a run only collapses with more than
+// MaxRepeat tokens, i.e. at least MaxRepeat separators (whitespace or , ， 、)
+// between them, so most subtitle lines can skip the regexp work entirely.
+func tooFewTokens(line string) bool {
+	seps := 0
+	for _, r := range line {
+		if unicode.IsSpace(r) || r == ',' || r == '，' || r == '、' {
+			if seps++; seps >= MaxRepeat {
+				return false
+			}
+		}
+	}
+	return true
+}
+
 // equalRun reports whether norms[b:b+n] exists and equals norms[a:a+n].
 func equalRun(norms []string, a, b, n int) bool {
 	if b+n > len(norms) {
@@ -197,6 +215,9 @@ func equalRun(norms []string, a, b, n int) bool {
 // collapseTextLine applies CollapseRepeats to a subtitle text line while
 // leaving surrounding markup such as <font ...> ... </font> untouched.
 func collapseTextLine(line string) string {
+	if tooFewTokens(line) {
+		return line
+	}
 	m := lineRE.FindStringSubmatch(line)
 	if m == nil {
 		return line

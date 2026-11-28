@@ -106,6 +106,18 @@ func (s *Server) handleCreateJob(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// Fail now rather than after the job has been queued: a missing binary would
+	// otherwise only surface as a failed job.
+	for _, bin := range []struct{ name, path string }{
+		{"whisper-cli.exe", s.Config.EffectiveWhisperCliPath()},
+		{"ffmpeg.exe", s.Config.EffectiveFfmpegPath()},
+	} {
+		if info, err := os.Stat(bin.path); err != nil || info.IsDir() {
+			writeErrorMsg(w, http.StatusBadRequest, fmt.Sprintf("%s was not found at %s; set its location in Settings", bin.name, bin.path))
+			return
+		}
+	}
+
 	jobReq := job.Request{
 		MediaPath:  mediaPath,
 		ModelID:    req.ModelID,
@@ -179,6 +191,59 @@ func (s *Server) handleCancelJob(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	w.WriteHeader(http.StatusAccepted)
+}
+
+// handlePauseJob / handleResumeJob freeze and thaw a transcribing job's
+// process. Both are bodiless like cancel.
+func (s *Server) handlePauseJob(w http.ResponseWriter, r *http.Request) {
+	s.pauseOrResume(w, r, s.Queue.Pause, job.ErrNotRunning, "job is not transcribing, so it cannot be paused")
+}
+
+func (s *Server) handleResumeJob(w http.ResponseWriter, r *http.Request) {
+	s.pauseOrResume(w, r, s.Queue.Resume, job.ErrNotPaused, "job is not paused")
+}
+
+func (s *Server) pauseOrResume(w http.ResponseWriter, r *http.Request, do func(string) error, conflict error, conflictMsg string) {
+	id := r.PathValue("id")
+	if _, ok := s.Store.Get(id); !ok {
+		writeErrorMsg(w, http.StatusNotFound, "job not found")
+		return
+	}
+	switch err := do(id); {
+	case err == nil:
+		w.WriteHeader(http.StatusAccepted)
+	case errors.Is(err, conflict):
+		writeErrorMsg(w, http.StatusConflict, conflictMsg)
+	default:
+		writeError(w, http.StatusInternalServerError, err)
+	}
+}
+
+type queueStateResponse struct {
+	Paused bool `json:"paused"`
+}
+
+func (s *Server) handleQueueState(w http.ResponseWriter, r *http.Request) {
+	writeJSON(w, http.StatusOK, queueStateResponse{Paused: s.Queue.Held()})
+}
+
+// handlePauseQueue / handleResumeQueue hold and release the whole queue.
+func (s *Server) handlePauseQueue(w http.ResponseWriter, r *http.Request) {
+	err := s.Queue.PauseAll()
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, queueStateResponse{Paused: s.Queue.Held()})
+}
+
+func (s *Server) handleResumeQueue(w http.ResponseWriter, r *http.Request) {
+	err := s.Queue.ResumeAll()
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, queueStateResponse{Paused: s.Queue.Held()})
 }
 
 type exportJobRequest struct {
